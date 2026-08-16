@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  agy-bridge:
+    build: .
+    container_name: rocketchat-agy-bridge
+    ports:
+      - "8080:8080"
+    environment:
+      - ROCKETCHAT_TOKEN=${ROCKETCHAT_TOKEN:-your_secure_token_here}
+    volumes:
+      - ./workspace:/workspace
+      - ./.gemini:/root/.gemini
+    restart: unless-stopped

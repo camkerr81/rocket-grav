@@ -1,0 +1,12 @@
+{
+  "name": "rocketchat-agy-bridge",
+  "version": "1.0.0",
+  "description": "API bridge for Rocket.Chat to Google Antigravity CLI",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
