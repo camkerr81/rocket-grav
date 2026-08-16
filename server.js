@@ -37,7 +37,8 @@ app.post('/webhook', (req, res) => {
     }
 
     let messageText = req.body.text || '';
-    messageText = messageText.replace(/^@\w+\s+/, '').trim();
+    // Strip out bot mentions or trigger words (e.g., @agy or !agy)
+    messageText = messageText.replace(/^(?:@\w+|!\w+)\s+/, '').trim();
 
     if (!messageText) {
         return res.json({ text: "Please provide a prompt." });
