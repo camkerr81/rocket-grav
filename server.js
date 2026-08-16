@@ -55,7 +55,7 @@ app.post('/webhook', (req, res) => {
     
     // For now, let's keep the wait but stream to console so the user can debug.
     
-    const commandArgs = ['-p', messageText, '--output-format', 'json', '--dangerously-skip-permissions'];
+    const commandArgs = ['-c', '-p', messageText, '--output-format', 'json', '--dangerously-skip-permissions'];
     console.log(`Executing: agy ${commandArgs.join(' ')}`);
 
     const child = spawn('agy', commandArgs, { cwd: '/workspace', shell: false });
@@ -89,17 +89,21 @@ app.post('/webhook', (req, res) => {
             const parsed = JSON.parse(finalOutput);
             finalOutput = parsed.output || parsed.response || parsed.text || JSON.stringify(parsed, null, 2);
         } catch (e) {
-            // If it's not valid JSON (or mixed with other logs), we wrap it in a code block
-            finalOutput = '```\n' + finalOutput + '\n```';
+            // Not valid JSON, just leave as raw text
         }
 
         if (finalOutput.length > 3900) {
             finalOutput = finalOutput.substring(0, 3900) + '\n...[output truncated]';
         }
 
+        // Always wrap in a terminal-style markdown block
+        if (!finalOutput.startsWith('```')) {
+            finalOutput = '```text\n' + finalOutput + '\n```';
+        }
+
         // Reply to the HTTP request (if it hasn't timed out yet)
         if (!res.headersSent) {
-            res.json({ text: finalOutput || 'Command finished with no output.' });
+            res.json({ text: finalOutput });
         }
     });
 });
