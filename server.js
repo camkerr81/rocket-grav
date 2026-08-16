@@ -55,7 +55,7 @@ app.post('/webhook', (req, res) => {
     
     // For now, let's keep the wait but stream to console so the user can debug.
     
-    const commandArgs = [messageText, '--dangerously-skip-permissions'];
+    const commandArgs = ['-p', messageText, '--output-format', 'json', '--dangerously-skip-permissions'];
     console.log(`Executing: agy ${commandArgs.join(' ')}`);
 
     const child = spawn('agy', commandArgs, { cwd: '/workspace', shell: false });
@@ -71,7 +71,7 @@ app.post('/webhook', (req, res) => {
     child.stderr.on('data', (data) => {
         const text = data.toString();
         process.stderr.write(text); // Stream to docker logs
-        output += text;
+        // We do NOT add stderr to output when expecting JSON, as it will break JSON parsing
     });
 
     child.on('error', (error) => {
@@ -82,13 +82,24 @@ app.post('/webhook', (req, res) => {
     child.on('close', (code) => {
         console.log(`\nCommand exited with code ${code}`);
         
-        if (output.length > 3900) {
-            output = output.substring(0, 3900) + '\n...[output truncated]';
+        let finalOutput = output.trim();
+        
+        try {
+            // Attempt to parse JSON
+            const parsed = JSON.parse(finalOutput);
+            finalOutput = parsed.output || parsed.response || parsed.text || JSON.stringify(parsed, null, 2);
+        } catch (e) {
+            // If it's not valid JSON (or mixed with other logs), we wrap it in a code block
+            finalOutput = '```\n' + finalOutput + '\n```';
+        }
+
+        if (finalOutput.length > 3900) {
+            finalOutput = finalOutput.substring(0, 3900) + '\n...[output truncated]';
         }
 
         // Reply to the HTTP request (if it hasn't timed out yet)
         if (!res.headersSent) {
-            res.json({ text: '```\n' + (output || 'Command finished with no output.') + '\n```' });
+            res.json({ text: finalOutput || 'Command finished with no output.' });
         }
     });
 });
