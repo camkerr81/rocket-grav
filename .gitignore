@@ -5,6 +5,10 @@
 .beads/proxieddb/
 
 node_modules/
-.gemini/
+# Ignore all .gemini contents by default to prevent leaking auth state
+.gemini/*
+!.gemini/antigravity-cli/
+.gemini/antigravity-cli/*
+!.gemini/antigravity-cli/skills/
 workspace/
 .env

@@ -10,4 +10,5 @@ services:
     volumes:
       - ./workspace:/workspace
       - ./.gemini:/root/.gemini
+      - ./skills:/root/.gemini/antigravity-cli/skills
     restart: unless-stopped
