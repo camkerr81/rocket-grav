@@ -35,7 +35,7 @@ async function postMessage(roomId, tmid, text) {
         console.warn("Missing API credentials. Cannot post message.");
         return null;
     }
-    const payload = { roomId, text, alias: 'AGY' };
+    const payload = { roomId, text, alias: 'AGY', emoji: ':robot:' };
     if (tmid) payload.tmid = tmid;
 
     try {
@@ -146,7 +146,21 @@ app.post('/webhook', async (req, res) => {
     }
 
     // Post the placeholder spinner message
-    const thinkingMsgId = await postMessage(roomId, tmid, "⏳ *AGY is thinking...*");
+    const thinkingMsgId = await postMessage(roomId, tmid, "`|` *AGY is thinking...*");
+    
+    // Setup animation loop
+    let isFinished = false;
+    if (thinkingMsgId) {
+        const frames = ['/', '-', '\\', '|'];
+        let i = 0;
+        const animate = async () => {
+            if (isFinished) return;
+            await updateMessage(roomId, thinkingMsgId, `\`${frames[i]}\` *AGY is thinking...*`);
+            i = (i + 1) % frames.length;
+            if (!isFinished) setTimeout(animate, 1000);
+        };
+        setTimeout(animate, 1000);
+    }
 
     // Standard AGY execution
     const data = getThreads();
@@ -176,6 +190,7 @@ app.post('/webhook', async (req, res) => {
     });
 
     child.on('error', async (error) => {
+        isFinished = true;
         console.error(`Spawn error: ${error.message}`);
         if (thinkingMsgId) {
             await updateMessage(roomId, thinkingMsgId, `Error: ${error.message}`);
@@ -183,6 +198,7 @@ app.post('/webhook', async (req, res) => {
     });
 
     child.on('close', async (code) => {
+        isFinished = true;
         console.log(`\nCommand exited with code ${code}`);
         
         let finalOutput = output.trim();
