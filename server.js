@@ -11,6 +11,12 @@ app.use(express.urlencoded({ extended: true }));
 
 const threadsFile = '/workspace/threads.json';
 
+// Fetch env vars for API access
+const ROCKETCHAT_URL = process.env.ROCKETCHAT_URL || 'http://rocketchat.example.com:3000';
+const ROCKETCHAT_USER_ID = process.env.ROCKETCHAT_USER_ID;
+const ROCKETCHAT_PAT = process.env.ROCKETCHAT_PAT;
+const ROCKETCHAT_TOKEN = process.env.ROCKETCHAT_TOKEN;
+
 function getThreads() {
     if (fs.existsSync(threadsFile)) {
         try {
@@ -22,6 +28,50 @@ function getThreads() {
 
 function saveThreads(data) {
     fs.writeFileSync(threadsFile, JSON.stringify(data, null, 2));
+}
+
+async function postMessage(roomId, tmid, text) {
+    if (!ROCKETCHAT_USER_ID || !ROCKETCHAT_PAT) {
+        console.warn("Missing API credentials. Cannot post message.");
+        return null;
+    }
+    const payload = { roomId, text, alias: 'AGY' };
+    if (tmid) payload.tmid = tmid;
+
+    try {
+        const response = await fetch(`${ROCKETCHAT_URL}/api/v1/chat.postMessage`, {
+            method: 'POST',
+            headers: {
+                'X-Auth-Token': ROCKETCHAT_PAT,
+                'X-User-Id': ROCKETCHAT_USER_ID,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        return data.success ? data.message._id : null;
+    } catch (e) {
+        console.error("Error posting message:", e);
+        return null;
+    }
+}
+
+async function updateMessage(roomId, msgId, text) {
+    if (!ROCKETCHAT_USER_ID || !ROCKETCHAT_PAT || !msgId) return;
+
+    try {
+        await fetch(`${ROCKETCHAT_URL}/api/v1/chat.update`, {
+            method: 'POST',
+            headers: {
+                'X-Auth-Token': ROCKETCHAT_PAT,
+                'X-User-Id': ROCKETCHAT_USER_ID,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ roomId, msgId, text })
+        });
+    } catch (e) {
+        console.error("Error updating message:", e);
+    }
 }
 
 // Middleware to filter requests by IP
@@ -45,21 +95,28 @@ const ipFilter = (req, res, next) => {
 
 app.use(ipFilter);
 
-app.post('/webhook', (req, res) => {
+app.post('/webhook', async (req, res) => {
     const providedToken = req.body.token;
-    const expectedToken = process.env.ROCKETCHAT_TOKEN;
 
-    if (!providedToken || providedToken !== expectedToken) {
+    if (!providedToken || providedToken !== ROCKETCHAT_TOKEN) {
         console.warn('Unauthorized request received (invalid token).');
         return res.status(401).json({ error: 'Unauthorized' });
     }
 
+    // Acknowledge the webhook immediately so Rocket.Chat doesn't time out
+    // Returning empty text prevents Rocket.Chat from sending a default webhook reply.
+    res.json({}); 
+
+    const roomId = req.body.channel_id;
+    // If the message is part of a thread, use that thread ID. Otherwise, use the message ID itself to start a thread.
+    const tmid = req.body.tmid || req.body.message_id || req.body._id;
+
     let messageText = req.body.text || '';
-    // Strip out bot mentions or trigger words (e.g., @agy or !agy)
     messageText = messageText.replace(/^(?:@\w+|!\w+)\s+/, '').trim();
 
     if (!messageText) {
-        return res.json({ text: "Please provide a prompt." });
+        await postMessage(roomId, tmid, "Please provide a prompt.");
+        return;
     }
 
     console.log(`\n--- NEW REQUEST ---`);
@@ -75,7 +132,8 @@ app.post('/webhook', (req, res) => {
             reply += `${name === data.active_thread ? '*' : ' '} ${name}\n`;
         }
         reply += `\nCurrently active: ${data.active_thread}`;
-        return res.json({ text: '```text\n' + reply + '\n```' });
+        await postMessage(roomId, tmid, '```text\n' + reply + '\n```');
+        return;
     }
 
     if (messageText.startsWith('thread switch ') || messageText.startsWith('thread checkout ')) {
@@ -83,75 +141,77 @@ app.post('/webhook', (req, res) => {
         const data = getThreads();
         data.active_thread = name;
         saveThreads(data);
-        return res.json({ text: '```text\nSwitched to thread: ' + name + '\n```' });
+        await postMessage(roomId, tmid, '```text\nSwitched to thread: ' + name + '\n```');
+        return;
     }
+
+    // Post the placeholder spinner message
+    const thinkingMsgId = await postMessage(roomId, tmid, "⏳ *AGY is thinking...*");
 
     // Standard AGY execution
     const data = getThreads();
     const activeThreadName = data.active_thread;
     const convId = data.threads[activeThreadName];
 
-    // Build arguments
     const commandArgs = ['-p', messageText, '--output-format', 'json', '--dangerously-skip-permissions'];
     if (convId) {
-        // If we know the UUID for this thread, explicitly resume it
         commandArgs.unshift(convId);
         commandArgs.unshift('--conversation');
     }
 
     console.log(`Executing: agy ${commandArgs.join(' ')}`);
-
     const child = spawn('agy', commandArgs, { cwd: '/workspace', shell: false });
     
     let output = '';
 
     child.stdout.on('data', (d) => {
         const text = d.toString();
-        process.stdout.write(text); // Stream to docker logs
+        process.stdout.write(text);
         output += text;
     });
 
     child.stderr.on('data', (d) => {
         const text = d.toString();
-        process.stderr.write(text); // Stream to docker logs
+        process.stderr.write(text);
     });
 
-    child.on('error', (error) => {
+    child.on('error', async (error) => {
         console.error(`Spawn error: ${error.message}`);
-        output += `Error: ${error.message}\n`;
+        if (thinkingMsgId) {
+            await updateMessage(roomId, thinkingMsgId, `Error: ${error.message}`);
+        }
     });
 
-    child.on('close', (code) => {
+    child.on('close', async (code) => {
         console.log(`\nCommand exited with code ${code}`);
         
         let finalOutput = output.trim();
         
         try {
-            // Attempt to parse JSON
             const parsed = JSON.parse(finalOutput);
-            
-            // If this was a new thread, AGY generates a new UUID. Save it!
             if (parsed.conversation_id && !convId) {
                 data.threads[activeThreadName] = parsed.conversation_id;
                 saveThreads(data);
             }
-
             finalOutput = parsed.output || parsed.response || parsed.text || JSON.stringify(parsed, null, 2);
         } catch (e) {
-            // Not valid JSON, just leave as raw text
+            // Not JSON
         }
 
-        if (finalOutput.length > 3900) {
-            finalOutput = finalOutput.substring(0, 3900) + '\n...[output truncated]';
+        if (finalOutput.length > 7000) {
+            finalOutput = finalOutput.substring(0, 7000) + '\n...[output truncated]';
         }
 
-        // Always wrap in a terminal-style markdown block
         if (!finalOutput.startsWith('```')) {
             finalOutput = '```text\n' + finalOutput + '\n```';
         }
 
-        if (!res.headersSent) {
-            res.json({ text: finalOutput });
+        // Update the placeholder message with the final result!
+        if (thinkingMsgId) {
+            await updateMessage(roomId, thinkingMsgId, finalOutput);
+        } else {
+            // Fallback if we failed to post the thinking message
+            await postMessage(roomId, tmid, finalOutput);
         }
     });
 });
