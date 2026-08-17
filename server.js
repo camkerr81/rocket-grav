@@ -1,5 +1,7 @@
 const express = require('express');
 const { spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 const port = 8080;
@@ -7,10 +9,26 @@ const port = 8080;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+const threadsFile = '/workspace/threads.json';
+
+function getThreads() {
+    if (fs.existsSync(threadsFile)) {
+        try {
+            return JSON.parse(fs.readFileSync(threadsFile, 'utf8'));
+        } catch(e) {}
+    }
+    return { active_thread: 'default', threads: {} };
+}
+
+function saveThreads(data) {
+    fs.writeFileSync(threadsFile, JSON.stringify(data, null, 2));
+}
+
 // Middleware to filter requests by IP
 const ipFilter = (req, res, next) => {
     const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     const isAllowed = 
+        clientIp.includes('127.0.0.1') || 
         clientIp.includes('127.0.0.1') || 
         clientIp.includes('chat.example.com') ||
         clientIp.includes('127.0.0.1') || 
@@ -47,31 +65,55 @@ app.post('/webhook', (req, res) => {
     console.log(`\n--- NEW REQUEST ---`);
     console.log(`Received prompt: ${messageText}`);
 
-    // Acknowledge the webhook immediately so Rocket.Chat doesn't time out
-    // Note: Rocket.Chat expects a JSON response. If we return 200 OK immediately,
-    // we cannot return the output in the same HTTP response. We'll return a placeholder.
-    // However, if we just want to see the logs, we can still wait for it, but let's 
-    // at least use spawn to stream to console so we don't get blind-sided by hangs.
-    
-    // For now, let's keep the wait but stream to console so the user can debug.
-    
-    const commandArgs = ['-c', '-p', messageText, '--output-format', 'json', '--dangerously-skip-permissions'];
+    // Thread management interception
+    if (messageText === 'threads' || messageText === 'thread list') {
+        const data = getThreads();
+        let reply = 'Available threads:\n-----------------\n';
+        const threadNames = Object.keys(data.threads);
+        if (threadNames.length === 0) reply += '(no active threads yet)\n';
+        for (const name of threadNames) {
+            reply += `${name === data.active_thread ? '*' : ' '} ${name}\n`;
+        }
+        reply += `\nCurrently active: ${data.active_thread}`;
+        return res.json({ text: '```text\n' + reply + '\n```' });
+    }
+
+    if (messageText.startsWith('thread switch ') || messageText.startsWith('thread checkout ')) {
+        const name = messageText.split(' ')[2].trim();
+        const data = getThreads();
+        data.active_thread = name;
+        saveThreads(data);
+        return res.json({ text: '```text\nSwitched to thread: ' + name + '\n```' });
+    }
+
+    // Standard AGY execution
+    const data = getThreads();
+    const activeThreadName = data.active_thread;
+    const convId = data.threads[activeThreadName];
+
+    // Build arguments
+    const commandArgs = ['-p', messageText, '--output-format', 'json', '--dangerously-skip-permissions'];
+    if (convId) {
+        // If we know the UUID for this thread, explicitly resume it
+        commandArgs.unshift(convId);
+        commandArgs.unshift('--conversation');
+    }
+
     console.log(`Executing: agy ${commandArgs.join(' ')}`);
 
     const child = spawn('agy', commandArgs, { cwd: '/workspace', shell: false });
     
     let output = '';
 
-    child.stdout.on('data', (data) => {
-        const text = data.toString();
+    child.stdout.on('data', (d) => {
+        const text = d.toString();
         process.stdout.write(text); // Stream to docker logs
         output += text;
     });
 
-    child.stderr.on('data', (data) => {
-        const text = data.toString();
+    child.stderr.on('data', (d) => {
+        const text = d.toString();
         process.stderr.write(text); // Stream to docker logs
-        // We do NOT add stderr to output when expecting JSON, as it will break JSON parsing
     });
 
     child.on('error', (error) => {
@@ -87,6 +129,13 @@ app.post('/webhook', (req, res) => {
         try {
             // Attempt to parse JSON
             const parsed = JSON.parse(finalOutput);
+            
+            // If this was a new thread, AGY generates a new UUID. Save it!
+            if (parsed.conversation_id && !convId) {
+                data.threads[activeThreadName] = parsed.conversation_id;
+                saveThreads(data);
+            }
+
             finalOutput = parsed.output || parsed.response || parsed.text || JSON.stringify(parsed, null, 2);
         } catch (e) {
             // Not valid JSON, just leave as raw text
@@ -101,7 +150,6 @@ app.post('/webhook', (req, res) => {
             finalOutput = '```text\n' + finalOutput + '\n```';
         }
 
-        // Reply to the HTTP request (if it hasn't timed out yet)
         if (!res.headersSent) {
             res.json({ text: finalOutput });
         }
