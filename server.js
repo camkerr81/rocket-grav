@@ -108,8 +108,8 @@ app.post('/webhook', async (req, res) => {
     res.json({}); 
 
     const roomId = req.body.channel_id;
-    // If the message is part of a thread, use that thread ID. Otherwise, use the message ID itself to start a thread.
-    const tmid = req.body.tmid || req.body.message_id || req.body._id;
+    // Only pass tmid if the original message was already in a thread
+    const tmid = req.body.tmid;
 
     let messageText = req.body.text || '';
     messageText = messageText.replace(/^(?:@\w+|!\w+)\s+/, '').trim();
@@ -200,10 +200,6 @@ app.post('/webhook', async (req, res) => {
 
         if (finalOutput.length > 7000) {
             finalOutput = finalOutput.substring(0, 7000) + '\n...[output truncated]';
-        }
-
-        if (!finalOutput.startsWith('```')) {
-            finalOutput = '```text\n' + finalOutput + '\n```';
         }
 
         // Update the placeholder message with the final result!
