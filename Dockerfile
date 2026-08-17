@@ -22,11 +22,8 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm install
 
-# Install Python dependencies for quota script
-RUN pip3 install pexpect
-
-# Copy server code and scripts
-COPY server.js scrape_agy_quota.py ./
+# Copy server code
+COPY server.js ./
 
 # Create the workspace directory
 RUN mkdir -p /workspace

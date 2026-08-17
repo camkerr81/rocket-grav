@@ -145,29 +145,6 @@ app.post('/webhook', async (req, res) => {
         return;
     }
 
-    if (messageText === 'check usage') {
-        const thinkingMsgId = await postMessage(roomId, tmid, "⏳ *Checking usage...*");
-        const scriptPath = '/app/scrape_agy_quota.py';
-        
-        if (!fs.existsSync(scriptPath)) {
-            const msg = `Usage script not found! Looking for \`${scriptPath}\`.`;
-            if (thinkingMsgId) await updateMessage(roomId, thinkingMsgId, msg);
-            return;
-        }
-        
-        const { exec } = require('child_process');
-        exec(`python3 ${scriptPath}`, async (error, stdout, stderr) => {
-            let finalOutput = error ? `Error: ${error.message}\n${stderr}` : stdout.trim();
-            finalOutput = '```text\n' + finalOutput + '\n```';
-            if (thinkingMsgId) {
-                await updateMessage(roomId, thinkingMsgId, finalOutput);
-            } else {
-                await postMessage(roomId, tmid, finalOutput);
-            }
-        });
-        return;
-    }
-
     // Post the placeholder spinner message
     const thinkingMsgId = await postMessage(roomId, tmid, "`|` *AGY is thinking...*");
     
