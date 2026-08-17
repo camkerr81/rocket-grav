@@ -147,10 +147,10 @@ app.post('/webhook', async (req, res) => {
 
     if (messageText === 'check usage') {
         const thinkingMsgId = await postMessage(roomId, tmid, "⏳ *Checking usage...*");
-        const scriptPath = '/workspace/usage.py';
+        const scriptPath = '/app/scrape_agy_quota.py';
         
         if (!fs.existsSync(scriptPath)) {
-            const msg = `Usage script not found! Please place your python script at \`${scriptPath}\` (in your local workspace folder).`;
+            const msg = `Usage script not found! Looking for \`${scriptPath}\`.`;
             if (thinkingMsgId) await updateMessage(roomId, thinkingMsgId, msg);
             return;
         }

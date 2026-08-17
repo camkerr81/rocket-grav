@@ -22,8 +22,8 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm install
 
-# Copy server code
-COPY server.js ./
+# Copy server code and scripts
+COPY server.js scrape_agy_quota.py ./
 
 # Create the workspace directory
 RUN mkdir -p /workspace
