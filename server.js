@@ -9,6 +9,18 @@ const port = 8080;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Serve the assets directory via HTTP
+const assetsDir = '/root/.gemini/antigravity-cli/scratch/Pixel-Paradox/backend/assets';
+app.use('/assets', express.static(assetsDir));
+app.get('/assets', (req, res) => {
+    if (!fs.existsSync(assetsDir)) return res.send('Assets directory not found (has AGY created it yet?)');
+    const files = fs.readdirSync(assetsDir);
+    let html = '<h1>Generated Images</h1><ul>';
+    files.forEach(f => html += `<li><a href="/assets/${f}" target="_blank">${f}</a></li>`);
+    html += '</ul>';
+    res.send(html);
+});
+
 const threadsFile = '/workspace/threads.json';
 
 // Fetch env vars for API access
