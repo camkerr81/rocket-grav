@@ -5,8 +5,11 @@ services:
     container_name: rocketchat-agy-bridge
     ports:
       - "8080:8080"
-    env_file:
-      - .env
+    environment:
+      - ROCKETCHAT_TOKEN=${ROCKETCHAT_TOKEN:-}
+      - ROCKETCHAT_USER_ID=${ROCKETCHAT_USER_ID:-}
+      - ROCKETCHAT_PAT=${ROCKETCHAT_PAT:-}
+      - ROCKETCHAT_URL=${ROCKETCHAT_URL:-http://rocketchat.example.com:3000}
     volumes:
       - ./workspace:/workspace
       - ./.gemini:/root/.gemini
