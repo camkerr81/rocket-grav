@@ -156,20 +156,42 @@ app.post('/webhook', async (req, res) => {
     }
 
     // Post the placeholder spinner message
-    const thinkingMsgId = await postMessage(roomId, tmid, "`|` *AGY is thinking...*");
+    const thinkingMsgId = await postMessage(roomId, tmid, "`⠋` *AGY is thinking...*");
     
     // Setup animation loop
     let isFinished = false;
     if (thinkingMsgId) {
-        const frames = ['/', '-', '\\', '|'];
-        let i = 0;
+        const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        const phrases = [
+            "AGY is thinking...",
+            "AGY is doing something...",
+            "AGY is solving the world's problems...",
+            "AGY is brewing digital coffee...",
+            "AGY is consulting the ancient texts...",
+            "AGY is untangling spacetime...",
+            "AGY is pondering existence..."
+        ];
+        
+        let frameIdx = 0;
+        let tick = 0;
+        let phraseIdx = 0;
+
         const animate = async () => {
             if (isFinished) return;
-            await updateMessage(roomId, thinkingMsgId, `\`${frames[i]}\` *AGY is thinking...*`);
-            i = (i + 1) % frames.length;
-            if (!isFinished) setTimeout(animate, 1000);
+            
+            // Switch phrase every 20 ticks (roughly 5 seconds)
+            if (tick > 0 && tick % 20 === 0) {
+                phraseIdx = (phraseIdx + 1) % phrases.length;
+            }
+            
+            await updateMessage(roomId, thinkingMsgId, `\`${frames[frameIdx]}\` *${phrases[phraseIdx]}*`);
+            
+            frameIdx = (frameIdx + 1) % frames.length;
+            tick++;
+            
+            if (!isFinished) setTimeout(animate, 250);
         };
-        setTimeout(animate, 1000);
+        setTimeout(animate, 250);
     }
 
     // Standard AGY execution
