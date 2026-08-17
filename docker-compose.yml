@@ -11,6 +11,7 @@ services:
       - ROCKETCHAT_PAT=${ROCKETCHAT_PAT:-}
       - ROCKETCHAT_URL=${ROCKETCHAT_URL:-http://rocketchat.example.com:3000}
       - GITEA_PAT=${GITEA_PAT:-}
+      - GEMINI_API=${GEMINI_API:-}
     volumes:
       - ./workspace:/workspace
       - ./.gemini:/root/.gemini
