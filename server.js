@@ -123,6 +123,16 @@ app.post('/webhook', async (req, res) => {
     console.log(`Received prompt: ${messageText}`);
 
     // Thread management interception
+    if (messageText === 'help') {
+        const helpText = `**AGY Bridge Commands**
+*   \`!agy <prompt>\` - Send a prompt to AGY in the current thread
+*   \`!agy thread list\` (or \`threads\`) - List all available threads and show the active one
+*   \`!agy thread switch <name>\` - Switch to an existing thread or create a new one
+*   \`!agy help\` - Show this help message`;
+        await postMessage(roomId, tmid, helpText);
+        return;
+    }
+
     if (messageText === 'threads' || messageText === 'thread list') {
         const data = getThreads();
         let reply = 'Available threads:\n-----------------\n';
