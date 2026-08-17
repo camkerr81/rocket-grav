@@ -10,6 +10,7 @@ services:
       - ROCKETCHAT_USER_ID=${ROCKETCHAT_USER_ID:-}
       - ROCKETCHAT_PAT=${ROCKETCHAT_PAT:-}
       - ROCKETCHAT_URL=${ROCKETCHAT_URL:-http://rocketchat.example.com:3000}
+      - GITEA_PAT=${GITEA_PAT:-}
     volumes:
       - ./workspace:/workspace
       - ./.gemini:/root/.gemini
