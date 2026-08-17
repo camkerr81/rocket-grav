@@ -122,14 +122,40 @@ app.post('/webhook', async (req, res) => {
     console.log(`\n--- NEW REQUEST ---`);
     console.log(`Received prompt: ${messageText}`);
 
-    // Thread management interception
     if (messageText === 'help') {
         const helpText = `**AGY Bridge Commands**
 *   \`!agy <prompt>\` - Send a prompt to AGY in the current thread
 *   \`!agy thread list\` (or \`threads\`) - List all available threads and show the active one
 *   \`!agy thread switch <name>\` - Switch to an existing thread or create a new one
+*   \`!agy log\` - Show the last few log entries of the active thread's transcript
 *   \`!agy help\` - Show this help message`;
         await postMessage(roomId, tmid, helpText);
+        return;
+    }
+
+    if (messageText === 'log' || messageText === 'logs') {
+        const data = getThreads();
+        const convId = data.threads[data.active_thread];
+        if (!convId) {
+            await postMessage(roomId, tmid, 'No active conversation found for this thread.');
+            return;
+        }
+        
+        const logPath = `/root/.gemini/antigravity-cli/brain/${convId}/.system_generated/logs/transcript.jsonl`;
+        if (!fs.existsSync(logPath)) {
+            await postMessage(roomId, tmid, 'Log file not found. Have you sent a prompt in this thread yet?');
+            return;
+        }
+        
+        const thinkingMsgId = await postMessage(roomId, tmid, "`⠋` *Fetching logs...*");
+        const { exec } = require('child_process');
+        exec(`tail -n 25 ${logPath}`, async (error, stdout) => {
+            let output = stdout.substring(0, 7000);
+            if (error) output = `Error: ${error.message}`;
+            if (thinkingMsgId) {
+                await updateMessage(roomId, thinkingMsgId, '```json\n' + output + '\n```');
+            }
+        });
         return;
     }
 
