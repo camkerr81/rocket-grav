@@ -193,6 +193,23 @@ app.post('/webhook', async (req, res) => {
         return;
     }
 
+    // Beads integration: automatically log bugs/features
+    const lowerText = messageText.toLowerCase();
+    if (lowerText.startsWith('bug ') || lowerText.startsWith('feature ') || lowerText.startsWith('fix ') || lowerText.startsWith('add ') || lowerText.startsWith('issue ')) {
+        try {
+            const { execSync } = require('child_process');
+            if (!fs.existsSync('/workspace/.beads')) {
+                execSync('/usr/local/bin/bd init', { cwd: '/workspace' });
+            }
+            const activeThread = getThreads().active_thread;
+            const title = messageText.replace(/"/g, '\\"');
+            const stdout = execSync(`/usr/local/bin/bd create "[Epic: ${activeThread}] ${title}"`, { cwd: '/workspace' }).toString();
+            await postMessage(roomId, tmid, `✅ Logged to Beads Issue Tracker:\n\`\`\`text\n${stdout.trim()}\n\`\`\``);
+        } catch (e) {
+            console.error("Beads error:", e.message);
+        }
+    }
+
     // Post the placeholder spinner message
     const thinkingMsgId = await postMessage(roomId, tmid, "`⠋` *AGY is thinking...*");
     

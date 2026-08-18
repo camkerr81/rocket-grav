@@ -22,8 +22,10 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm install
 
-# Copy server code
+# Copy server code and binaries
 COPY server.js ./
+COPY bin/bd /usr/local/bin/bd
+RUN chmod +x /usr/local/bin/bd
 
 # Create the workspace directory
 RUN mkdir -p /workspace
