@@ -237,7 +237,7 @@ app.post('/webhook', async (req, res) => {
     const activeThreadName = data.active_thread;
     const convId = data.threads[activeThreadName];
 
-    const commandArgs = ['-p', messageText, '--output-format', 'json', '--dangerously-skip-permissions'];
+    const commandArgs = ['-p', messageText, '--output-format', 'stream-json', '--dangerously-skip-permissions'];
     if (convId) {
         commandArgs.unshift(convId);
         commandArgs.unshift('--conversation');
@@ -246,12 +246,37 @@ app.post('/webhook', async (req, res) => {
     console.log(`Executing: agy ${commandArgs.join(' ')}`);
     const child = spawn('agy', commandArgs, { cwd: '/workspace', shell: false });
     
-    let output = '';
+    let finalResultObj = null;
+    let rawOutput = '';
 
     child.stdout.on('data', (d) => {
         const text = d.toString();
-        process.stdout.write(text);
-        output += text;
+        rawOutput += text;
+        const lines = text.split('\n');
+        for (let line of lines) {
+            if (!line.trim()) continue;
+            try {
+                const parsed = JSON.parse(line);
+                if (parsed.event === 'step_update' && parsed.step_update) {
+                    if (parsed.step_update.thinking_delta) {
+                        process.stdout.write(`\x1b[90m${parsed.step_update.thinking_delta}\x1b[0m`);
+                    } else if (parsed.step_update.text_delta) {
+                        process.stdout.write(parsed.step_update.text_delta);
+                    } else if (parsed.step_update.tool_calls) {
+                        for (let tc of parsed.step_update.tool_calls) {
+                           process.stdout.write(`\x1b[36m\n[Tool Call: ${tc.name}]\x1b[0m\n`);
+                        }
+                    }
+                } else if (parsed.event === 'result') {
+                    finalResultObj = parsed.result;
+                } else if (parsed.event === 'init') {
+                    process.stdout.write(`\x1b[32m\n[AGY Initialized - Conversation UUID: ${parsed.conversation_id}]\x1b[0m\n`);
+                }
+            } catch(e) {
+                // If it isn't valid JSON (like raw error dumps), print it as-is
+                process.stdout.write(line + '\n');
+            }
+        }
     });
 
     child.stderr.on('data', (d) => {
@@ -271,17 +296,16 @@ app.post('/webhook', async (req, res) => {
         isFinished = true;
         console.log(`\nCommand exited with code ${code}`);
         
-        let finalOutput = output.trim();
-        
-        try {
-            const parsed = JSON.parse(finalOutput);
-            if (parsed.conversation_id && !convId) {
-                data.threads[activeThreadName] = parsed.conversation_id;
+        let finalOutput = '';
+        if (finalResultObj) {
+            if (finalResultObj.conversation_id && !convId) {
+                data.threads[activeThreadName] = finalResultObj.conversation_id;
                 saveThreads(data);
             }
-            finalOutput = parsed.output || parsed.response || parsed.text || JSON.stringify(parsed, null, 2);
-        } catch (e) {
-            // Not JSON
+            finalOutput = finalResultObj.response || finalResultObj.error || JSON.stringify(finalResultObj, null, 2);
+        } else {
+            // Fallback if we never received a result event
+            finalOutput = "Error: AGY exited abruptly. Check container logs.\nRaw output trace:\n" + rawOutput.substring(rawOutput.length - 1000);
         }
 
         if (finalOutput.length > 7000) {
