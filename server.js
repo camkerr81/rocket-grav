@@ -258,14 +258,19 @@ app.post('/webhook', async (req, res) => {
             try {
                 const parsed = JSON.parse(line);
                 if (parsed.event === 'step_update' && parsed.step_update) {
-                    if (parsed.step_update.thinking_delta) {
+                    if (parsed.step_update.step_type === 'tool') {
+                        if (parsed.step_update.state === 'ACTIVE') {
+                            process.stdout.write(`\x1b[36m\n[Tool Call: ${parsed.step_update.tool_name}]\x1b[0m\n`);
+                            if (parsed.step_update.tool_info && parsed.step_update.tool_info.parameters) {
+                                process.stdout.write(`\x1b[90m${JSON.stringify(parsed.step_update.tool_info.parameters)}\x1b[0m\n`);
+                            }
+                        } else if (parsed.step_update.state === 'DONE') {
+                            process.stdout.write(`\x1b[32m[Tool Finished: ${parsed.step_update.tool_name}]\x1b[0m\n`);
+                        }
+                    } else if (parsed.step_update.thinking_delta) {
                         process.stdout.write(`\x1b[90m${parsed.step_update.thinking_delta}\x1b[0m`);
                     } else if (parsed.step_update.text_delta) {
                         process.stdout.write(parsed.step_update.text_delta);
-                    } else if (parsed.step_update.tool_calls) {
-                        for (let tc of parsed.step_update.tool_calls) {
-                           process.stdout.write(`\x1b[36m\n[Tool Call: ${tc.name}]\x1b[0m\n`);
-                        }
                     }
                 } else if (parsed.event === 'result') {
                     finalResultObj = parsed.result;
