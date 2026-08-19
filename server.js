@@ -232,34 +232,17 @@ app.post('/webhook', async (req, res) => {
     
     // Setup animation loop
     let isFinished = false;
+    let currentStatus = "Initializing...";
     if (thinkingMsgId) {
         const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-        const phrases = [
-            "AGY is thinking...",
-            "AGY is doing something...",
-            "AGY is solving the world's problems...",
-            "AGY is brewing digital coffee...",
-            "AGY is consulting the ancient texts...",
-            "AGY is untangling spacetime...",
-            "AGY is pondering existence..."
-        ];
-        
         let frameIdx = 0;
-        let tick = 0;
-        let phraseIdx = 0;
-
+        
         const animate = async () => {
             if (isFinished) return;
             
-            // Switch phrase every 20 ticks (roughly 5 seconds)
-            if (tick > 0 && tick % 20 === 0) {
-                phraseIdx = (phraseIdx + 1) % phrases.length;
-            }
-            
-            await updateMessage(roomId, thinkingMsgId, `\`${frames[frameIdx]}\` *${phrases[phraseIdx]}*`);
+            await updateMessage(roomId, thinkingMsgId, `\`${frames[frameIdx]}\` *${currentStatus}*`);
             
             frameIdx = (frameIdx + 1) % frames.length;
-            tick++;
             
             if (!isFinished) setTimeout(animate, 250);
         };
@@ -294,16 +277,20 @@ app.post('/webhook', async (req, res) => {
                 if (parsed.event === 'step_update' && parsed.step_update) {
                     if (parsed.step_update.step_type === 'tool') {
                         if (parsed.step_update.state === 'ACTIVE') {
+                            currentStatus = `Running ${parsed.step_update.tool_name}...`;
                             process.stdout.write(`\x1b[36m\n[Tool Call: ${parsed.step_update.tool_name}]\x1b[0m\n`);
                             if (parsed.step_update.tool_info && parsed.step_update.tool_info.parameters) {
                                 process.stdout.write(`\x1b[90m${JSON.stringify(parsed.step_update.tool_info.parameters)}\x1b[0m\n`);
                             }
                         } else if (parsed.step_update.state === 'DONE') {
+                            currentStatus = "Thinking...";
                             process.stdout.write(`\x1b[32m[Tool Finished: ${parsed.step_update.tool_name}]\x1b[0m\n`);
                         }
                     } else if (parsed.step_update.thinking_delta) {
+                        currentStatus = "Thinking...";
                         process.stdout.write(`\x1b[90m${parsed.step_update.thinking_delta}\x1b[0m`);
                     } else if (parsed.step_update.text_delta) {
+                        currentStatus = "Writing response...";
                         process.stdout.write(parsed.step_update.text_delta);
                     }
                 } else if (parsed.event === 'result') {
