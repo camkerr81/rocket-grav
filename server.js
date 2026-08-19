@@ -392,12 +392,16 @@ app.post('/webhook', async (req, res) => {
             if (finalResultObj && finalResultObj.usage) {
                 const inTokens = finalResultObj.usage.input_tokens || 0;
                 const outTokens = finalResultObj.usage.output_tokens || 0;
+                const cacheTokens = finalResultObj.usage.cache_read_tokens || 0;
+                
                 // Based on user's GCP Billing CSV rates for Gemini 3 Pro (per 1M tokens)
                 const inCost = (inTokens / 1000000) * 2.8779;
                 const outCost = (outTokens / 1000000) * 17.2674;
-                const totalCost = inCost + outCost;
+                const cacheCost = (cacheTokens / 1000000) * 0.2878;
+                
+                const totalCost = inCost + outCost + cacheCost;
                 if (totalCost > 0) {
-                    finalOutput += `\n\n*(Estimated cost: $${totalCost.toFixed(4)})*`;
+                    finalOutput += `\n\n*(Estimated cost for this execution: $${totalCost.toFixed(4)})*`;
                 }
             }
 
