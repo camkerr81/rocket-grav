@@ -140,8 +140,25 @@ app.post('/webhook', async (req, res) => {
 *   \`!agy thread list\` (or \`threads\`) - List all available threads and show the active one
 *   \`!agy thread switch <name>\` - Switch to an existing thread or create a new one
 *   \`!agy log\` - Show the last few log entries of the active thread's transcript
+*   \`!agy issues\` (or \`beads\`) - List all open beads issues
 *   \`!agy help\` - Show this help message`;
         await postMessage(roomId, tmid, helpText);
+        return;
+    }
+
+    if (messageText.toLowerCase() === 'issues' || messageText.toLowerCase() === 'beads') {
+        try {
+            const { execFileSync } = require('child_process');
+            if (!fs.existsSync('/workspace/.beads')) {
+                await postMessage(roomId, tmid, 'No Beads project initialized yet.');
+                return;
+            }
+            const stdout = execFileSync('/usr/local/bin/bd', ['list'], { cwd: '/workspace' }).toString();
+            await postMessage(roomId, tmid, `**Current Issues:**\n\`\`\`text\n${stdout.trim() || 'No open issues.'}\n\`\`\``);
+        } catch (e) {
+            const errOut = e.stdout ? e.stdout.toString() : e.message;
+            await postMessage(roomId, tmid, `Error retrieving beads:\n\`\`\`text\n${errOut.trim()}\n\`\`\``);
+        }
         return;
     }
 
