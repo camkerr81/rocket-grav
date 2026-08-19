@@ -389,6 +389,18 @@ app.post('/webhook', async (req, res) => {
                 finalOutput = finalOutput.substring(0, 7000) + '\n...[output truncated]';
             }
 
+            if (finalResultObj && finalResultObj.usage) {
+                const inTokens = finalResultObj.usage.input_tokens || 0;
+                const outTokens = finalResultObj.usage.output_tokens || 0;
+                // Based on user's GCP Billing CSV rates for Gemini 3 Pro (per 1M tokens)
+                const inCost = (inTokens / 1000000) * 2.8779;
+                const outCost = (outTokens / 1000000) * 17.2674;
+                const totalCost = inCost + outCost;
+                if (totalCost > 0) {
+                    finalOutput += `\n\n*(Estimated cost: $${totalCost.toFixed(4)})*`;
+                }
+            }
+
             if (thinkingMsgId) {
                 await updateMessage(roomId, thinkingMsgId, finalOutput);
             } else {
