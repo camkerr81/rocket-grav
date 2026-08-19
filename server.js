@@ -260,95 +260,105 @@ app.post('/webhook', async (req, res) => {
         commandArgs.unshift('--conversation');
     }
 
-    console.log(`Executing: agy ${commandArgs.join(' ')}`);
-    const child = spawn('agy', commandArgs, { cwd: '/workspace', shell: false });
-    
-    let finalResultObj = null;
-    let rawOutput = '';
-
-    child.stdout.on('data', (d) => {
-        const text = d.toString();
-        rawOutput += text;
-        const lines = text.split('\n');
-        for (let line of lines) {
-            if (!line.trim()) continue;
-            try {
-                const parsed = JSON.parse(line);
-                if (parsed.event === 'step_update' && parsed.step_update) {
-                    if (parsed.step_update.step_type === 'tool') {
-                        if (parsed.step_update.state === 'ACTIVE') {
-                            currentStatus = `Running ${parsed.step_update.tool_name}...`;
-                            process.stdout.write(`\x1b[36m\n[Tool Call: ${parsed.step_update.tool_name}]\x1b[0m\n`);
-                            if (parsed.step_update.tool_info && parsed.step_update.tool_info.parameters) {
-                                process.stdout.write(`\x1b[90m${JSON.stringify(parsed.step_update.tool_info.parameters)}\x1b[0m\n`);
-                            }
-                        } else if (parsed.step_update.state === 'DONE') {
-                            currentStatus = "Thinking...";
-                            process.stdout.write(`\x1b[32m[Tool Finished: ${parsed.step_update.tool_name}]\x1b[0m\n`);
-                        }
-                    } else if (parsed.step_update.thinking_delta) {
-                        currentStatus = "Thinking...";
-                        process.stdout.write(`\x1b[90m${parsed.step_update.thinking_delta}\x1b[0m`);
-                    } else if (parsed.step_update.text_delta) {
-                        currentStatus = "Writing response...";
-                        process.stdout.write(parsed.step_update.text_delta);
-                    }
-                } else if (parsed.event === 'result') {
-                    finalResultObj = parsed.result;
-                } else if (parsed.event === 'init') {
-                    process.stdout.write(`\x1b[32m\n[AGY Initialized - Conversation UUID: ${parsed.conversation_id}]\x1b[0m\n`);
-                }
-            } catch(e) {
-                // If it isn't valid JSON (like raw error dumps), print it as-is
-                process.stdout.write(line + '\n');
-            }
-        }
-    });
-
-    child.stderr.on('data', (d) => {
-        const text = d.toString();
-        process.stderr.write(text);
-    });
-
-    child.on('error', async (error) => {
-        isFinished = true;
-        console.error(`Spawn error: ${error.message}`);
-        if (thinkingMsgId) {
-            await updateMessage(roomId, thinkingMsgId, `Error: ${error.message}`);
-        }
-    });
-
-    child.on('close', async (code) => {
-        isFinished = true;
-        console.log(`\nCommand exited with code ${code}`);
+    const executeAgy = (attempt = 1) => {
+        console.log(`Executing (Attempt ${attempt}/3): agy ${commandArgs.join(' ')}`);
+        const child = spawn('agy', commandArgs, { cwd: '/workspace', shell: false });
         
-        let finalOutput = '';
-        if (finalResultObj) {
-            if (finalResultObj.conversation_id && !convId) {
-                data.threads[activeThreadName] = finalResultObj.conversation_id;
-                saveThreads(data);
-            }
-            finalOutput = finalResultObj.response || finalResultObj.error || JSON.stringify(finalResultObj, null, 2);
-            if (finalResultObj.error) {
-                finalOutput += "\n\n**Raw Trace Details:**\n```json\n" + rawOutput.substring(Math.max(0, rawOutput.length - 1500)) + "\n```";
-            }
-        } else {
-            // Fallback if we never received a result event
-            finalOutput = "Error: AGY exited abruptly. Check container logs.\nRaw output trace:\n```json\n" + rawOutput.substring(Math.max(0, rawOutput.length - 1500)) + "\n```";
-        }
+        let finalResultObj = null;
+        let rawOutput = '';
 
-        if (finalOutput.length > 7000) {
-            finalOutput = finalOutput.substring(0, 7000) + '\n...[output truncated]';
-        }
+        child.stdout.on('data', (d) => {
+            const text = d.toString();
+            rawOutput += text;
+            const lines = text.split('\n');
+            for (let line of lines) {
+                if (!line.trim()) continue;
+                try {
+                    const parsed = JSON.parse(line);
+                    if (parsed.event === 'step_update' && parsed.step_update) {
+                        if (parsed.step_update.step_type === 'tool') {
+                            if (parsed.step_update.state === 'ACTIVE') {
+                                currentStatus = `Running ${parsed.step_update.tool_name}...`;
+                                process.stdout.write(`\x1b[36m\n[Tool Call: ${parsed.step_update.tool_name}]\x1b[0m\n`);
+                                if (parsed.step_update.tool_info && parsed.step_update.tool_info.parameters) {
+                                    process.stdout.write(`\x1b[90m${JSON.stringify(parsed.step_update.tool_info.parameters)}\x1b[0m\n`);
+                                }
+                            } else if (parsed.step_update.state === 'DONE') {
+                                currentStatus = "Thinking...";
+                                process.stdout.write(`\x1b[32m[Tool Finished: ${parsed.step_update.tool_name}]\x1b[0m\n`);
+                            }
+                        } else if (parsed.step_update.thinking_delta) {
+                            currentStatus = "Thinking...";
+                            process.stdout.write(`\x1b[90m${parsed.step_update.thinking_delta}\x1b[0m`);
+                        } else if (parsed.step_update.text_delta) {
+                            currentStatus = "Writing response...";
+                            process.stdout.write(parsed.step_update.text_delta);
+                        }
+                    } else if (parsed.event === 'result') {
+                        finalResultObj = parsed.result;
+                    } else if (parsed.event === 'init') {
+                        process.stdout.write(`\x1b[32m\n[AGY Initialized - Conversation UUID: ${parsed.conversation_id}]\x1b[0m\n`);
+                    }
+                } catch(e) {
+                    process.stdout.write(line + '\n');
+                }
+            }
+        });
 
-        // Update the placeholder message with the final result!
-        if (thinkingMsgId) {
-            await updateMessage(roomId, thinkingMsgId, finalOutput);
-        } else {
-            // Fallback if we failed to post the thinking message
-            await postMessage(roomId, tmid, finalOutput);
-        }
-    });
+        child.stderr.on('data', (d) => {
+            const text = d.toString();
+            process.stderr.write(text);
+        });
+
+        child.on('error', async (error) => {
+            isFinished = true;
+            console.error(`Spawn error: ${error.message}`);
+            if (thinkingMsgId) {
+                await updateMessage(roomId, thinkingMsgId, `Error: ${error.message}`);
+            }
+        });
+
+        child.on('close', async (code) => {
+            console.log(`\nCommand exited with code ${code}`);
+            
+            let hasError = false;
+            if (!finalResultObj || finalResultObj.error) hasError = true;
+
+            if (hasError && attempt < 3) {
+                currentStatus = `Command failed. Retrying (Attempt ${attempt + 1}/3)...`;
+                console.log(currentStatus);
+                setTimeout(() => executeAgy(attempt + 1), 2000);
+                return;
+            }
+
+            isFinished = true;
+            let finalOutput = '';
+            if (finalResultObj) {
+                if (finalResultObj.conversation_id && !convId) {
+                    data.threads[activeThreadName] = finalResultObj.conversation_id;
+                    saveThreads(data);
+                }
+                finalOutput = finalResultObj.response || finalResultObj.error || JSON.stringify(finalResultObj, null, 2);
+                if (finalResultObj.error) {
+                    finalOutput += "\n\n**Raw Trace Details:**\n```json\n" + rawOutput.substring(Math.max(0, rawOutput.length - 1500)) + "\n```";
+                }
+            } else {
+                finalOutput = "Error: AGY exited abruptly. Check container logs.\nRaw output trace:\n```json\n" + rawOutput.substring(Math.max(0, rawOutput.length - 1500)) + "\n```";
+            }
+
+            if (finalOutput.length > 7000) {
+                finalOutput = finalOutput.substring(0, 7000) + '\n...[output truncated]';
+            }
+
+            if (thinkingMsgId) {
+                await updateMessage(roomId, thinkingMsgId, finalOutput);
+            } else {
+                await postMessage(roomId, tmid, finalOutput);
+            }
+        });
+    };
+
+    executeAgy(1);
 });
 
 app.listen(port, () => {
