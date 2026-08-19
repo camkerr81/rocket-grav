@@ -322,7 +322,8 @@ app.post('/webhook', async (req, res) => {
             console.log(`\nCommand exited with code ${code}`);
             
             let hasError = false;
-            if (!finalResultObj || finalResultObj.error) hasError = true;
+            if (code !== 0) hasError = true;
+            if (finalResultObj && finalResultObj.error) hasError = true;
 
             if (hasError && attempt < 3) {
                 currentStatus = `Command failed. Retrying (Attempt ${attempt + 1}/3)...`;
