@@ -21,6 +21,7 @@ app.get('/assets', (req, res) => {
     res.send(html);
 });
 
+const activeProcesses = {};
 const threadsFile = '/workspace/threads.json';
 
 // Fetch env vars for API access
@@ -137,12 +138,26 @@ app.post('/webhook', async (req, res) => {
     if (messageText === 'help') {
         const helpText = `**AGY Bridge Commands**
 *   \`!agy <prompt>\` - Send a prompt to AGY in the current thread
+*   \`!agy reply <answer>\` - Reply to an interactive question asked by AGY
 *   \`!agy thread list\` (or \`threads\`) - List all available threads and show the active one
 *   \`!agy thread switch <name>\` - Switch to an existing thread or create a new one
 *   \`!agy log\` - Show the last few log entries of the active thread's transcript
 *   \`!agy issues\` (or \`beads\`) - List all open beads issues
 *   \`!agy help\` - Show this help message`;
         await postMessage(roomId, tmid, helpText);
+        return;
+    }
+
+    if (messageText.toLowerCase().startsWith('reply ') || messageText.toLowerCase().startsWith('answer ')) {
+        const data = getThreads();
+        const convId = data.threads[data.active_thread];
+        if (convId && activeProcesses[convId]) {
+            const answer = messageText.split(' ').slice(1).join(' ');
+            activeProcesses[convId].stdin.write(answer + '\n');
+            await postMessage(roomId, tmid, `Sent reply: **${answer}**`);
+        } else {
+            await postMessage(roomId, tmid, 'No active process found for this thread to reply to.');
+        }
         return;
     }
 
@@ -263,6 +278,7 @@ app.post('/webhook', async (req, res) => {
     const executeAgy = (attempt = 1) => {
         console.log(`Executing (Attempt ${attempt}/3): agy ${commandArgs.join(' ')}`);
         const child = spawn('agy', commandArgs, { cwd: '/workspace', shell: false });
+        if (convId) activeProcesses[convId] = child;
         
         let finalResultObj = null;
         let rawOutput = '';
@@ -283,6 +299,21 @@ app.post('/webhook', async (req, res) => {
                                 if (parsed.step_update.tool_info && parsed.step_update.tool_info.parameters) {
                                     process.stdout.write(`\x1b[90m${JSON.stringify(parsed.step_update.tool_info.parameters)}\x1b[0m\n`);
                                 }
+                                // Intercept ask_question to display to user
+                                if (parsed.step_update.tool_name === 'ask_question' && parsed.step_update.tool_info && parsed.step_update.tool_info.parameters) {
+                                    const params = parsed.step_update.tool_info.parameters;
+                                    let promptText = `**AGY has a question:**\n\n`;
+                                    if (params.questions) {
+                                        params.questions.forEach(q => {
+                                            promptText += `*${q.question}*\n`;
+                                            if (q.options) {
+                                                q.options.forEach((opt, i) => promptText += `  ${i+1}. ${opt}\n`);
+                                            }
+                                        });
+                                    }
+                                    promptText += `\n*(Reply using \`!agy reply <your answer>\`)*`;
+                                    postMessage(roomId, tmid, promptText);
+                                }
                             } else if (parsed.step_update.state === 'DONE') {
                                 currentStatus = "Thinking...";
                                 process.stdout.write(`\x1b[32m[Tool Finished: ${parsed.step_update.tool_name}]\x1b[0m\n`);
@@ -297,6 +328,7 @@ app.post('/webhook', async (req, res) => {
                     } else if (parsed.event === 'result') {
                         finalResultObj = parsed.result;
                     } else if (parsed.event === 'init') {
+                        if (parsed.conversation_id) activeProcesses[parsed.conversation_id] = child;
                         process.stdout.write(`\x1b[32m\n[AGY Initialized - Conversation UUID: ${parsed.conversation_id}]\x1b[0m\n`);
                     }
                 } catch(e) {
@@ -321,6 +353,12 @@ app.post('/webhook', async (req, res) => {
         child.on('close', async (code) => {
             console.log(`\nCommand exited with code ${code}`);
             
+            if (finalResultObj && finalResultObj.conversation_id) {
+                delete activeProcesses[finalResultObj.conversation_id];
+            } else if (convId) {
+                delete activeProcesses[convId];
+            }
+
             let hasError = false;
             if (code !== 0) hasError = true;
             if (finalResultObj && finalResultObj.error) hasError = true;
