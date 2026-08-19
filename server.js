@@ -282,6 +282,7 @@ app.post('/webhook', async (req, res) => {
         
         let finalResultObj = null;
         let rawOutput = '';
+        let imageGenerationCount = 0;
 
         child.stdout.on('data', (d) => {
             const text = d.toString();
@@ -315,6 +316,9 @@ app.post('/webhook', async (req, res) => {
                                     postMessage(roomId, tmid, promptText);
                                 }
                             } else if (parsed.step_update.state === 'DONE') {
+                                if (parsed.step_update.tool_name === 'generate_image') {
+                                    imageGenerationCount++;
+                                }
                                 currentStatus = "Thinking...";
                                 process.stdout.write(`\x1b[32m[Tool Finished: ${parsed.step_update.tool_name}]\x1b[0m\n`);
                             }
@@ -389,20 +393,11 @@ app.post('/webhook', async (req, res) => {
                 finalOutput = finalOutput.substring(0, 7000) + '\n...[output truncated]';
             }
 
-            if (finalResultObj && finalResultObj.usage) {
-                const inTokens = finalResultObj.usage.input_tokens || 0;
-                const outTokens = finalResultObj.usage.output_tokens || 0;
-                const cacheTokens = finalResultObj.usage.cache_read_tokens || 0;
-                
-                // Based on user's GCP Billing CSV rates for Gemini 3 Pro (per 1M tokens)
-                const inCost = (inTokens / 1000000) * 2.8779;
-                const outCost = (outTokens / 1000000) * 17.2674;
-                const cacheCost = (cacheTokens / 1000000) * 0.2878;
-                
-                const totalCost = inCost + outCost + cacheCost;
-                if (totalCost > 0) {
-                    finalOutput += `\n\n*(Estimated cost for this execution: $${totalCost.toFixed(4)})*`;
-                }
+            if (imageGenerationCount > 0) {
+                // Text queries are covered by Antigravity subscription ($0)
+                // We only bill for generated images via GCP API (~$0.03 per image)
+                const imageCost = imageGenerationCount * 0.03;
+                finalOutput += `\n\n*(Estimated GCP API cost for ${imageGenerationCount} image(s): $${imageCost.toFixed(4)})*`;
             }
 
             if (thinkingMsgId) {
