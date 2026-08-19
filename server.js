@@ -47,7 +47,7 @@ async function postMessage(roomId, tmid, text) {
         console.warn("Missing API credentials. Cannot post message.");
         return null;
     }
-    const payload = { roomId, text, alias: 'AGY', emoji: ':robot:' };
+    const payload = { roomId, text, alias: 'MangoBot', emoji: ':robot:' };
     if (tmid) payload.tmid = tmid;
 
     try {
@@ -329,9 +329,12 @@ app.post('/webhook', async (req, res) => {
                 saveThreads(data);
             }
             finalOutput = finalResultObj.response || finalResultObj.error || JSON.stringify(finalResultObj, null, 2);
+            if (finalResultObj.error) {
+                finalOutput += "\n\n**Raw Trace Details:**\n```json\n" + rawOutput.substring(Math.max(0, rawOutput.length - 1500)) + "\n```";
+            }
         } else {
             // Fallback if we never received a result event
-            finalOutput = "Error: AGY exited abruptly. Check container logs.\nRaw output trace:\n" + rawOutput.substring(rawOutput.length - 1000);
+            finalOutput = "Error: AGY exited abruptly. Check container logs.\nRaw output trace:\n```json\n" + rawOutput.substring(Math.max(0, rawOutput.length - 1500)) + "\n```";
         }
 
         if (finalOutput.length > 7000) {
