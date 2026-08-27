@@ -22,6 +22,25 @@ app.get('/assets', (req, res) => {
 });
 
 const activeProcesses = {};
+let currentModel = null; // null = use default subscription model
+
+// Shorthand aliases for quick model switching
+const MODEL_ALIASES = {
+    'claude':       'claude-opus-4-6-thinking',
+    'claude-opus':  'claude-opus-4-6-thinking',
+    'claude-sonnet':'claude-sonnet-4-6',
+    'sonnet':       'claude-sonnet-4-6',
+    'opus':         'claude-opus-4-6-thinking',
+    'gemini':       'gemini-3.1-pro-low',
+    'gemini-pro':   'gemini-3.1-pro-low',
+    'gemini-pro-high': 'gemini-3.1-pro-high',
+    'flash':        'gemini-3.7-flash-medium',
+    'flash-high':   'gemini-3.7-flash-high',
+    'flash-low':    'gemini-3.7-flash-low',
+    'gpt':          'gpt-oss-120b-medium',
+    'default':      null,
+};
+
 const threadsFile = '/workspace/threads.json';
 
 // Fetch env vars for API access
@@ -139,12 +158,45 @@ app.post('/webhook', async (req, res) => {
         const helpText = `**AGY Bridge Commands**
 *   \`!agy <prompt>\` - Send a prompt to AGY in the current thread
 *   \`!agy reply <answer>\` - Reply to an interactive question asked by AGY
+*   \`!agy model\` - Show the current model
+*   \`!agy model list\` (or \`models\`) - List available models
+*   \`!agy model switch <name>\` - Switch model (e.g. \`claude\`, \`flash\`, \`gemini\`, \`default\`)
 *   \`!agy thread list\` (or \`threads\`) - List all available threads and show the active one
 *   \`!agy thread switch <name>\` - Switch to an existing thread or create a new one
 *   \`!agy log\` - Show the last few log entries of the active thread's transcript
 *   \`!agy issues\` (or \`beads\`) - List all open beads issues
 *   \`!agy help\` - Show this help message`;
         await postMessage(roomId, tmid, helpText);
+        return;
+    }
+
+    if (messageText.toLowerCase() === 'model') {
+        await postMessage(roomId, tmid, `Current model: **${currentModel || 'default (subscription)'}**`);
+        return;
+    }
+
+    if (messageText.toLowerCase() === 'models' || messageText.toLowerCase() === 'model list') {
+        let reply = '**Available Models:**\n';
+        reply += '| Shortcut | Full Model ID |\n|---|---|\n';
+        for (const [alias, modelId] of Object.entries(MODEL_ALIASES)) {
+            reply += `| \`${alias}\` | ${modelId || '*(subscription default)*'} |\n`;
+        }
+        reply += `\nCurrent: **${currentModel || 'default (subscription)'}**`;
+        reply += `\nSwitch with: \`!agy model switch <name>\``;
+        await postMessage(roomId, tmid, reply);
+        return;
+    }
+
+    if (messageText.toLowerCase().startsWith('model switch ') || messageText.toLowerCase().startsWith('model use ')) {
+        const requestedModel = messageText.split(' ').slice(2).join(' ').trim().toLowerCase();
+        if (MODEL_ALIASES.hasOwnProperty(requestedModel)) {
+            currentModel = MODEL_ALIASES[requestedModel];
+            await postMessage(roomId, tmid, `✅ Switched to: **${currentModel || 'default (subscription)'}**`);
+        } else {
+            // Assume they passed a full model ID directly
+            currentModel = requestedModel;
+            await postMessage(roomId, tmid, `✅ Switched to: **${currentModel}**\n*(Note: using raw model ID — make sure this is valid)*`);
+        }
         return;
     }
 
@@ -270,6 +322,9 @@ app.post('/webhook', async (req, res) => {
     const convId = data.threads[activeThreadName];
 
     const commandArgs = ['-p', messageText, '--output-format', 'stream-json', '--dangerously-skip-permissions'];
+    if (currentModel) {
+        commandArgs.push('--model', currentModel);
+    }
     if (convId) {
         commandArgs.unshift(convId);
         commandArgs.unshift('--conversation');
