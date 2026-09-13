@@ -46,6 +46,7 @@ const threadsFile = '/workspace/threads.json';
 const { getAdapter } = require('./adapters');
 const adapter = getAdapter();
 console.log(`[Rocket-Grav] Initialized with chat adapter: ${adapter.name.toUpperCase()}`);
+if (adapter.url) console.log(`[Rocket-Grav] Target chat server URL: ${adapter.url}`);
 
 function getThreads() {
     if (fs.existsSync(threadsFile)) {
@@ -266,6 +267,9 @@ app.post('/webhook', async (req, res) => {
 
     // Post the placeholder spinner message
     const thinkingMsgId = await postMessage(roomId, tmid, "`⠋` *AGY is thinking...*");
+    if (!thinkingMsgId) {
+        console.warn(`[Rocket-Grav] Warning: Failed to send initial placeholder message to room ${roomId}. Check bot credentials (ROCKETCHAT_USER_ID, ROCKETCHAT_PAT) and ROCKETCHAT_URL.`);
+    }
     
     // Setup animation loop
     let isFinished = false;

@@ -48,9 +48,12 @@ class RocketChatAdapter extends BaseAdapter {
                 body: JSON.stringify(payload)
             });
             const data = await response.json();
+            if (!data.success) {
+                console.error(`[RocketChatAdapter] API error posting message to ${this.url}/api/v1/chat.postMessage:`, data);
+            }
             return data.success ? data.message._id : null;
         } catch (e) {
-            console.error('[RocketChatAdapter] Error posting message:', e.message);
+            console.error(`[RocketChatAdapter] Connection error posting message to ${this.url}/api/v1/chat.postMessage:`, e.message);
             return null;
         }
     }
@@ -59,7 +62,7 @@ class RocketChatAdapter extends BaseAdapter {
         if (!this.userId || !this.pat || !msgId) return;
 
         try {
-            await fetch(`${this.url}/api/v1/chat.update`, {
+            const response = await fetch(`${this.url}/api/v1/chat.update`, {
                 method: 'POST',
                 headers: {
                     'X-Auth-Token': this.pat,
@@ -68,8 +71,12 @@ class RocketChatAdapter extends BaseAdapter {
                 },
                 body: JSON.stringify({ roomId, msgId, text })
             });
+            const data = await response.json();
+            if (!data.success) {
+                console.error(`[RocketChatAdapter] API error updating message ${msgId} at ${this.url}/api/v1/chat.update:`, data);
+            }
         } catch (e) {
-            console.error('[RocketChatAdapter] Error updating message:', e.message);
+            console.error(`[RocketChatAdapter] Connection error updating message at ${this.url}:`, e.message);
         }
     }
 }
