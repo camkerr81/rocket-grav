@@ -67,14 +67,16 @@ const updateMessage = (roomId, msgId, text) => adapter.updateMessage(roomId, msg
 // Middleware to filter requests by IP
 const ipFilter = (req, res, next) => {
     const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const envAllowed = process.env.ALLOWED_IPS 
+        ? process.env.ALLOWED_IPS.split(',').map(s => s.trim()) 
+        : [];
+    
     const isAllowed = 
-        clientIp.includes('127.0.0.1') || 
-        clientIp.includes('127.0.0.1') || 
-        clientIp.includes('chat.example.com') ||
         clientIp.includes('127.0.0.1') || 
         clientIp.includes('::1') ||
         clientIp.startsWith('::ffff:172.') || 
-        clientIp.startsWith('172.');
+        clientIp.startsWith('172.') ||
+        envAllowed.some(allowed => allowed && (clientIp.includes(allowed) || clientIp.startsWith(allowed)));
         
     if (!isAllowed) {
         console.warn(`Blocked request from unauthorized IP: ${clientIp}`);

@@ -248,6 +248,7 @@ Configure your `.env` file according to your selected provider:
 | `BOT_NAME` | Bot username / alias displayed in messages. | `MangoBot` |
 | `GEMINI_API` | (Optional) Gemini API key for external tooling. | — |
 | `GITEA_PAT` | (Optional) Personal access token for Gitea automation. | — |
+| `ALLOWED_IPS` | (Optional) Comma-separated list of additional allowed client IPs/subnets. | — |
 
 #### Rocket.Chat Provider (`CHAT_PROVIDER=rocketchat`)
 
@@ -264,7 +265,7 @@ Configure your `.env` file according to your selected provider:
 |---|:---:|---|
 | `MATTERMOST_TOKEN` | Yes | Token from Mattermost Outgoing Webhook integration. |
 | `MATTERMOST_PAT` | Yes | Bot Access Token or Personal Access Token for REST API. |
-| `MATTERMOST_URL` | Yes | URL of your Mattermost instance (e.g. `http://mattermost:8065`). |
+| `MATTERMOST_URL` | Yes | URL of your Mattermost instance (e.g. `http://mattermost.example.com:8065`). |
 
 #### Slack Provider (`CHAT_PROVIDER=slack`)
 
@@ -280,7 +281,7 @@ Configure your `.env` file according to your selected provider:
 ### Step 1: Clone the Repository
 
 ```bash
-git clone http://git.example.com:3000/camkerr81/rocket-grav.git
+git clone https://github.com/camkerr81/rocket-grav.git
 cd rocket-grav
 ```
 
@@ -290,9 +291,9 @@ Create a `.env` file in the root directory:
 
 ```env
 CHAT_PROVIDER=rocketchat
-ROCKETCHAT_TOKEN=your_webhook_token_here
-ROCKETCHAT_USER_ID=qW8x9J2kL4mNpQrSt
-ROCKETCHAT_PAT=your_personal_access_token
+ROCKETCHAT_TOKEN=your_outgoing_webhook_token_here
+ROCKETCHAT_USER_ID=your_bot_user_id_here
+ROCKETCHAT_PAT=your_bot_personal_access_token_here
 ROCKETCHAT_URL=http://rocketchat.example.com:3000
 ```
 
