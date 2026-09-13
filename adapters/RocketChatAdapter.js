@@ -3,7 +3,7 @@ const BaseAdapter = require('./BaseAdapter');
 class RocketChatAdapter extends BaseAdapter {
     constructor() {
         super('rocketchat');
-        this.url = process.env.ROCKETCHAT_URL || 'http://localhost:3000';
+        this.url = process.env.ROCKETCHAT_URL || 'http://192.168.8.177:3100';
         this.userId = process.env.ROCKETCHAT_USER_ID;
         this.pat = process.env.ROCKETCHAT_PAT;
         this.token = process.env.ROCKETCHAT_TOKEN;
