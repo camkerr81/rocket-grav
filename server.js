@@ -66,20 +66,28 @@ const updateMessage = (roomId, msgId, text) => adapter.updateMessage(roomId, msg
 
 // Middleware to filter requests by IP
 const ipFilter = (req, res, next) => {
-    const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    if (process.env.DISABLE_IP_FILTER === 'true') {
+        return next();
+    }
+
+    const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
     const envAllowed = process.env.ALLOWED_IPS 
-        ? process.env.ALLOWED_IPS.split(',').map(s => s.trim()) 
+        ? process.env.ALLOWED_IPS.split(',').map(s => s.trim()).filter(Boolean)
         : [];
     
+    // Allow localhost, standard private networks (RFC1918), and Docker subnets by default
     const isAllowed = 
+        envAllowed.includes('*') ||
         clientIp.includes('127.0.0.1') || 
         clientIp.includes('::1') ||
+        clientIp.includes('192.168.') ||
+        clientIp.includes('10.') ||
         clientIp.startsWith('::ffff:172.') || 
         clientIp.startsWith('172.') ||
-        envAllowed.some(allowed => allowed && (clientIp.includes(allowed) || clientIp.startsWith(allowed)));
+        envAllowed.some(allowed => clientIp.includes(allowed) || clientIp.startsWith(allowed));
         
     if (!isAllowed) {
-        console.warn(`Blocked request from unauthorized IP: ${clientIp}`);
+        console.warn(`[Rocket-Grav] Blocked request from unauthorized IP: ${clientIp}`);
         return res.status(403).json({ error: 'Forbidden' });
     }
     next();
