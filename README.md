@@ -336,8 +336,6 @@ rocket-grav/
 │   ├── MattermostAdapter.js     # Mattermost adapter
 │   ├── SlackAdapter.js          # Slack adapter
 │   └── index.js                 # Adapter registry & factory
-├── bin/
-│   └── bd                       # Bundled Beads issue tracker Linux binary
 ├── docs/
 │   └── images/
 │       └── icon.png             # 16-bit retro launcher icon

@@ -178,7 +178,8 @@ app.post('/webhook', async (req, res) => {
                 await postMessage(roomId, tmid, 'No Beads project initialized yet.');
                 return;
             }
-            const stdout = execFileSync('/usr/local/bin/bd', ['list'], { cwd: '/workspace' }).toString();
+            const bdPath = fs.existsSync('/usr/local/bin/bd') ? '/usr/local/bin/bd' : 'bd';
+            const stdout = execFileSync(bdPath, ['list'], { cwd: '/workspace' }).toString();
             await postMessage(roomId, tmid, `**Current Issues:**\n\`\`\`text\n${stdout.trim() || 'No open issues.'}\n\`\`\``);
         } catch (e) {
             const errOut = e.stdout ? e.stdout.toString() : e.message;
@@ -240,12 +241,13 @@ app.post('/webhook', async (req, res) => {
     if (lowerText.startsWith('bug ') || lowerText.startsWith('feature ') || lowerText.startsWith('fix ') || lowerText.startsWith('add ') || lowerText.startsWith('issue ')) {
         try {
             const { execSync } = require('child_process');
+            const bdPath = fs.existsSync('/usr/local/bin/bd') ? '/usr/local/bin/bd' : 'bd';
             if (!fs.existsSync('/workspace/.beads')) {
-                execSync('/usr/local/bin/bd init', { cwd: '/workspace' });
+                execSync(`${bdPath} init`, { cwd: '/workspace' });
             }
             const activeThread = getThreads().active_thread;
             const title = messageText.replace(/"/g, '\\"');
-            const stdout = execSync(`/usr/local/bin/bd create "[Epic: ${activeThread}] ${title}"`, { cwd: '/workspace' }).toString();
+            const stdout = execSync(`${bdPath} create "[Epic: ${activeThread}] ${title}"`, { cwd: '/workspace' }).toString();
             await postMessage(roomId, tmid, `[✓] Logged to Beads Issue Tracker:\n\`\`\`text\n${stdout.trim()}\n\`\`\``);
         } catch (e) {
             console.error("Beads error:", e.message);

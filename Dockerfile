@@ -22,11 +22,12 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm install
 
-# Copy server code, adapters and binaries
+# Copy server code and adapters
 COPY server.js ./
 COPY adapters/ ./adapters/
-COPY bin/bd /usr/local/bin/bd
-RUN chmod +x /usr/local/bin/bd
+
+# Install Beads issue tracker CLI globally
+RUN npm install -g @beads/bd
 
 # Create the workspace directory
 RUN mkdir -p /workspace
