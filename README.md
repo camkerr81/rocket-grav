@@ -17,35 +17,47 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Architecture-Modular%20Adapters-blueviolet" alt="Modular Architecture" />
   <img src="https://img.shields.io/badge/Platforms-Rocket.Chat%20%7C%20Mattermost%20%7C%20Slack-brightgreen" alt="Chat Platforms" />
-  <img src="https://img.shields.io/badge/Antigravity%20CLI-AGY%20JetSki-4285F4?logo=google&logoColor=white" alt="Antigravity CLI" />
+  <img src="https://img.shields.io/badge/Antigravity%20CLI-AGY%20JetSki-4285F4" alt="Antigravity CLI" />
   <img src="https://img.shields.io/badge/Beads-Issue%20Tracker-9B59B6" alt="Beads Tracker" />
-  <img src="https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white" alt="Docker" />
+  <img src="https://img.shields.io/badge/Docker-Ready-2496ED" alt="Docker" />
 </p>
 
 ---
 
-## 🚀 Overview
+## [!] Motivation & Why This Was Built
 
-**Rocket-Grav** is a lightweight, modular service that bridges chat platforms with Google's **Antigravity CLI** (`agy`). It gives teams and developers an autonomous coding agent (`MangoBot`) that lives right inside their team chat channels.
+The primary motivation behind building **Rocket-Grav** was to enable seamless access to the **Google Antigravity CLI (`agy`) from anywhere, on any device** (mobile phone, tablet, laptop, or remote workstation through a team chat client) while taking full advantage of an existing **Antigravity AI subscription**.
 
-### Core Features
+By bridging chat platforms directly to a containerized Antigravity CLI runtime:
 
-* 🔌 **Modular Chat Adapters:** Built with a pluggable architecture. Switch between **Rocket.Chat**, **Mattermost**, or **Slack** with a single environment toggle (`CHAT_PROVIDER`).
-* ⚡ **Live Animated Progress:** Updates messages in-place with real-time Braille spinners (`⠋`, `⠙`, `⠹`...) and active tool descriptions (`Running run_command...`, `Thinking...`).
-* 💬 **Interactive Stdin Piping:** Intercepts agent interactive questions (`ask_question`) and allows users to reply (`!agy reply <choice>`), piping answers directly into the running process.
-* 🧠 **On-The-Fly Model Switching:** Switch underlying LLM models anytime (`!agy model switch claude`, `flash`, `gemini`, `gpt`) to manage quota limits or adjust reasoning depth.
-* 🧵 **Isolated Thread Sessions:** Manages multiple conversation threads and contexts across conversations via `threads.json`.
-* 📋 **Automatic Issue Tracking:** Automatically detects bug/feature prompts and logs them to the embedded [Beads](https://github.com/steven-tey/beads) issue tracker (`bd create`).
-* 🔁 **Auto-Retry Resilience:** Automatically retries failing CLI invocations up to 3 times, surfacing complete JSON trace dumps if hard errors persist.
-* 🖼️ **Asset Server & Cost Estimator:** Tracks generated assets and serves them over a built-in static HTTP gallery (`/assets`), calculating GCP API costs when images are generated.
+* **Zero Per-Token API Costs:** All core reasoning, file analysis, and autonomous coding workflows utilize your flat Antigravity subscription plan rather than requiring metered commercial API keys or prepaid credits.
+* **Device Independence:** Trigger complex refactors, inspect build logs, or fix bugs straight from a mobile chat app without needing terminal access or an open IDE.
+* **Asynchronous Automation:** Fire off prompts into dedicated threads and receive structured notifications, live progress updates, and completion reports wherever you are.
 
 ---
 
-## 🏛️ Architectural Flow
+## ▶ Overview
+
+**Rocket-Grav** is a lightweight, modular gateway service connecting chat webhooks to Google's **Antigravity CLI** (`agy`). It provides an autonomous coding agent (`MangoBot`) accessible from any designated channel or thread.
+
+### Core Capabilities
+
+* • **Modular Chat Adapters:** Built with a pluggable adapter architecture. Switch between **Rocket.Chat**, **Mattermost**, or **Slack** with a single configuration variable (`CHAT_PROVIDER`).
+* • **Live Animated Progress:** Updates messages in-place with real-time Braille status spinners (`⠋`, `⠙`, `⠹`...) and tool descriptions (`Running run_command...`, `Thinking...`).
+* • **Interactive Stdin Piping:** Intercepts agent interactive questions (`ask_question`) and allows users to reply directly (`!agy reply <choice>`), piping answers into the running process.
+* • **On-The-Fly Model Switching:** Switch underlying language models anytime (`!agy model switch claude`, `flash`, `gemini`, `gpt`) to navigate quota limits or optimize reasoning depth.
+* • **Isolated Thread Sessions:** Manages multiple conversation threads and contexts independently via `threads.json`.
+* • **Automatic Issue Tracking:** Automatically identifies bug/feature requests and registers them in the integrated [Beads](https://github.com/steven-tey/beads) issue tracker (`bd create`).
+* • **Auto-Retry Resilience:** Automatically retries failing CLI invocations up to 3 times, surfacing complete JSON trace dumps if hard errors persist.
+* • **Asset Server & Cost Tracking:** Tracks visual assets generated during runs and serves them via an embedded static HTTP gallery (`/assets`), calculating GCP API costs when external image generation APIs are invoked.
+
+---
+
+## ▶ Architectural Flow
 
 Rocket-Grav uses a decoupled three-tier architecture: the **Chat Adapter Layer**, the **Core Bridge Engine**, and the **Antigravity Runtime**.
 
-### ASCII Communication Flow
+### Communication Flow
 
 ```text
  [ Team Chat ]              [ Rocket-Grav Bridge ]             [ AGY Agent Process ]
@@ -81,13 +93,13 @@ sequenceDiagram
 
     User->>Adapter: Webhook POST (!agy prompt)
     Adapter->>Core: Normalized Message Payload
-    Core->>Adapter: Send Initial Spinner (⠋ Thinking...)
+    Core->>Adapter: Send Initial Spinner (Thinking...)
     Adapter->>User: Display Placeholder Message
     Core->>AGY: Spawn CLI (stream-json mode)
     
     loop Real-time NDJSON Stream
         AGY-->>Core: Tool Call / Thinking Delta
-        Core->>Adapter: Update Message (chat.update)
+        Core->>Adapter: Update Message (in-place)
         Adapter-->>User: Refresh Live Spinner
     end
 
@@ -106,9 +118,9 @@ sequenceDiagram
 
 ---
 
-## 🔌 Modular Provider Architecture
+## ▶ Modular Provider Architecture
 
-All chat integrations inherit from the base adapter located in `adapters/BaseAdapter.js`:
+All chat integrations inherit from the base adapter interface located in `adapters/BaseAdapter.js`:
 
 ```text
 adapters/
@@ -119,7 +131,7 @@ adapters/
 └── index.js                 # Dynamic factory driven by CHAT_PROVIDER
 ```
 
-To switch platforms, simply set `CHAT_PROVIDER` in your `.env` file:
+To switch platforms, set `CHAT_PROVIDER` in your `.env` file:
 
 ```env
 CHAT_PROVIDER=rocketchat     # Options: rocketchat | mattermost | slack
@@ -129,14 +141,14 @@ CHAT_PROVIDER=rocketchat     # Options: rocketchat | mattermost | slack
 
 | Feature | Rocket.Chat | Mattermost | Slack |
 |---|:---:|:---:|:---:|
-| **Inbound Webhook** | Supported | Supported | Supported |
+| **Inbound Webhook** | [✓] Supported | [✓] Supported | [✓] Supported |
 | **In-Place Live Spinner** | `chat.update` | `PUT /api/v4/posts` | `chat.update` |
 | **Interactive Stdin Reply** | `!agy reply` | `!agy reply` | `!agy reply` |
 | **Thread Support** | `tmid` | `root_id` | `thread_ts` |
 
 ---
 
-## 💻 Usage Switches & Commands
+## ▶ Usage Switches & Commands
 
 All commands can be invoked using the `!agy` prefix or `@agy` bot mention.
 
@@ -149,7 +161,7 @@ All commands can be invoked using the `!agy` prefix or `@agy` bot mention.
 
 ### 2. Issue Tracking (Beads)
 
-Commands starting with issue keywords are automatically registered in the [Beads](https://github.com/steven-tey/beads) issue tracker (`bd create`) before work begins:
+Commands starting with issue keywords are automatically registered in the [Beads](https://github.com/steven-tey/beads) issue tracker (`bd create`) before execution begins:
 
 | Command | Description | Example |
 |---|---|---|
@@ -210,19 +222,19 @@ Dynamically select language models without restarting the container:
 
 ### 6. Diagnostics & Endpoints
 
-* `!agy log` / `!agy logs`: Tails the last 25 lines of the active thread's `transcript.jsonl`.
-* `POST /webhook`: Inbound webhook endpoint for chat platforms or external automations.
-* `GET /assets`: Static gallery viewer for generated images and assets.
+* • `!agy log` / `!agy logs`: Tails the last 25 lines of the active thread's `transcript.jsonl`.
+* • `POST /webhook`: Inbound webhook endpoint for chat platforms or external automation scripts.
+* • `GET /assets`: Static gallery viewer for generated images and assets.
 
 ---
 
-## 🐳 Docker Setup & Installation
+## ▶ Docker Setup & Installation
 
 ### 1. Prerequisites
 
-* Docker and Docker Compose (or Portainer / Dockhand).
-* A Google account with Antigravity CLI access.
-* An active instance of Rocket.Chat, Mattermost, or Slack.
+* • Docker and Docker Compose (or Portainer / Dockhand).
+* • A Google account with Antigravity CLI access.
+* • An active instance of Rocket.Chat, Mattermost, or Slack.
 
 ### 2. Environment Variables
 
@@ -263,7 +275,7 @@ Configure your `.env` file according to your selected provider:
 
 ---
 
-## 🛠️ Step-by-Step Walkthrough
+## ▶ Step-by-Step Walkthrough
 
 ### Step 1: Clone the Repository
 
@@ -304,17 +316,17 @@ docker exec -it rocketchat-agy-bridge agy
 
 ### Step 5: Configure Outgoing Webhook in Chat
 
-1. In Rocket.Chat, go to **Administration** ➔ **Integrations** ➔ **New Integration** ➔ **Outgoing WebHook**.
+1. In Rocket.Chat, go to **Administration** -> **Integrations** -> **New Integration** -> **Outgoing WebHook**.
 2. Set:
    * **Event Trigger:** `Message Sent`
    * **Trigger Words:** `!agy`, `@agy`
    * **URL:** `http://<bridge-host-ip>:8080/webhook`
    * **Token:** The same token specified in `ROCKETCHAT_TOKEN`.
-3. Save the integration and test by sending `!agy help` in your chat!
+3. Save the integration and test by sending `!agy help` in your chat.
 
 ---
 
-## 📁 Repository Structure
+## ▶ Repository Structure
 
 ```text
 rocket-grav/
@@ -341,7 +353,7 @@ rocket-grav/
 
 ---
 
-## 🛡️ License
+## ▶ License
 
 Internal project for autonomous development workflows with chat integrations and Google Antigravity.
 All rights reserved.

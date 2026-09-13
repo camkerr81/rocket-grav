@@ -34,7 +34,7 @@ class RocketChatAdapter extends BaseAdapter {
             return null;
         }
 
-        const payload = { roomId, text, alias: this.botAlias, emoji: ':robot:' };
+        const payload = { roomId, text, alias: this.botAlias };
         if (tmid) payload.tmid = tmid;
 
         try {

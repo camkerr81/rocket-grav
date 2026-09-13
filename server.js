@@ -149,11 +149,11 @@ app.post('/webhook', async (req, res) => {
         const requestedModel = messageText.split(' ').slice(2).join(' ').trim().toLowerCase();
         if (MODEL_ALIASES.hasOwnProperty(requestedModel)) {
             currentModel = MODEL_ALIASES[requestedModel];
-            await postMessage(roomId, tmid, `✅ Switched to: **${currentModel || 'default (subscription)'}**`);
+            await postMessage(roomId, tmid, `[✓] Switched to: **${currentModel || 'default (subscription)'}**`);
         } else {
             // Assume they passed a full model ID directly
             currentModel = requestedModel;
-            await postMessage(roomId, tmid, `✅ Switched to: **${currentModel}**\n*(Note: using raw model ID — make sure this is valid)*`);
+            await postMessage(roomId, tmid, `[✓] Switched to: **${currentModel}**\n*(Note: using raw model ID — make sure this is valid)*`);
         }
         return;
     }
@@ -246,7 +246,7 @@ app.post('/webhook', async (req, res) => {
             const activeThread = getThreads().active_thread;
             const title = messageText.replace(/"/g, '\\"');
             const stdout = execSync(`/usr/local/bin/bd create "[Epic: ${activeThread}] ${title}"`, { cwd: '/workspace' }).toString();
-            await postMessage(roomId, tmid, `✅ Logged to Beads Issue Tracker:\n\`\`\`text\n${stdout.trim()}\n\`\`\``);
+            await postMessage(roomId, tmid, `[✓] Logged to Beads Issue Tracker:\n\`\`\`text\n${stdout.trim()}\n\`\`\``);
         } catch (e) {
             console.error("Beads error:", e.message);
         }
