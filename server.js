@@ -61,6 +61,73 @@ function saveThreads(data) {
     fs.writeFileSync(threadsFile, JSON.stringify(data, null, 2));
 }
 
+function formatToolStatus(toolName, params = {}) {
+    switch (toolName) {
+        case 'run_command': {
+            const cmd = params.CommandLine || '';
+            const trimmed = cmd.length > 280 ? cmd.substring(0, 280) + '...' : cmd;
+            return `**Running command:**\n\`\`\`bash\n$ ${trimmed}\n\`\`\``;
+        }
+        case 'view_file': {
+            const file = params.AbsolutePath ? path.basename(params.AbsolutePath) : 'file';
+            const lines = params.StartLine ? ` (lines ${params.StartLine}-${params.EndLine || ''})` : '';
+            return `**Viewing file:** \`${file}\`${lines}`;
+        }
+        case 'write_to_file': {
+            const file = params.TargetFile ? path.basename(params.TargetFile) : 'file';
+            return `**Writing file:** \`${file}\``;
+        }
+        case 'replace_file_content': {
+            const file = params.TargetFile ? path.basename(params.TargetFile) : 'file';
+            const desc = params.Instruction || params.Description || '';
+            const descText = desc ? `\n> *${desc.length > 120 ? desc.substring(0, 120) + '...' : desc}*` : '';
+            return `**Editing file:** \`${file}\`${descText}`;
+        }
+        case 'grep_search': {
+            return `**Searching code:** \`${params.Query || ''}\``;
+        }
+        case 'find_by_name': {
+            return `**Locating file:** \`${params.Pattern || ''}\``;
+        }
+        case 'generate_image': {
+            const prompt = params.Prompt ? ` — *"${params.Prompt.substring(0, 80)}..."*` : '';
+            return `**Generating image**${prompt}`;
+        }
+        default: {
+            const summary = params.toolSummary || params.Description || '';
+            return `**Executing tool:** \`${toolName}\`${summary ? ` — *${summary}*` : ''}`;
+        }
+    }
+}
+
+function formatToolSummary(toolName, params = {}) {
+    switch (toolName) {
+        case 'run_command': {
+            const cmd = params.CommandLine || '';
+            const trimmed = cmd.length > 35 ? cmd.substring(0, 35) + '...' : cmd;
+            return `Run: \`$ ${trimmed}\``;
+        }
+        case 'view_file': {
+            return `View: \`${path.basename(params.AbsolutePath || 'file')}\``;
+        }
+        case 'write_to_file': {
+            return `Write: \`${path.basename(params.TargetFile || 'file')}\``;
+        }
+        case 'replace_file_content': {
+            return `Edit: \`${path.basename(params.TargetFile || 'file')}\``;
+        }
+        case 'grep_search': {
+            return `Search: \`"${params.Query || ''}"\``;
+        }
+        case 'find_by_name': {
+            return `Find: \`"${params.Pattern || ''}"\``;
+        }
+        default: {
+            return `Tool: \`${toolName}\``;
+        }
+    }
+}
+
 // Wrapper calls that delegate to the active chat provider adapter
 const postMessage = (roomId, tmid, text) => adapter.postMessage(roomId, tmid, text);
 const updateMessage = (roomId, msgId, text) => adapter.updateMessage(roomId, msgId, text);
@@ -273,7 +340,19 @@ app.post('/webhook', async (req, res) => {
     
     // Setup animation loop
     let isFinished = false;
-    let currentStatus = "Initializing...";
+    let currentStatus = "*Initializing...*";
+    let recentActions = [];
+    let currentToolParams = {};
+    let lastRenderedMessage = "";
+
+    const buildStatusMessage = (spinnerFrame) => {
+        let msg = `\`${spinnerFrame}\` ${currentStatus}`;
+        if (recentActions.length > 0) {
+            msg += `\n\n*Completed actions:*\n` + recentActions.map(act => `• ${act}`).join('\n');
+        }
+        return msg;
+    };
+
     if (thinkingMsgId) {
         const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
         let frameIdx = 0;
@@ -281,13 +360,17 @@ app.post('/webhook', async (req, res) => {
         const animate = async () => {
             if (isFinished) return;
             
-            await updateMessage(roomId, thinkingMsgId, `\`${frames[frameIdx]}\` *${currentStatus}*`);
+            const message = buildStatusMessage(frames[frameIdx]);
+            if (message !== lastRenderedMessage) {
+                lastRenderedMessage = message;
+                await updateMessage(roomId, thinkingMsgId, message);
+            }
             
             frameIdx = (frameIdx + 1) % frames.length;
             
-            if (!isFinished) setTimeout(animate, 250);
+            if (!isFinished) setTimeout(animate, 600);
         };
-        setTimeout(animate, 250);
+        setTimeout(animate, 600);
     }
 
     // Standard AGY execution
@@ -324,38 +407,43 @@ app.post('/webhook', async (req, res) => {
                     if (parsed.event === 'step_update' && parsed.step_update) {
                         if (parsed.step_update.step_type === 'tool') {
                             if (parsed.step_update.state === 'ACTIVE') {
-                                currentStatus = `Running ${parsed.step_update.tool_name}...`;
-                                process.stdout.write(`\x1b[36m\n[Tool Call: ${parsed.step_update.tool_name}]\x1b[0m\n`);
-                                if (parsed.step_update.tool_info && parsed.step_update.tool_info.parameters) {
-                                    process.stdout.write(`\x1b[90m${JSON.stringify(parsed.step_update.tool_info.parameters)}\x1b[0m\n`);
+                                const toolName = parsed.step_update.tool_name;
+                                currentToolParams = (parsed.step_update.tool_info && parsed.step_update.tool_info.parameters) || {};
+                                currentStatus = formatToolStatus(toolName, currentToolParams);
+                                process.stdout.write(`\x1b[36m\n[Tool Call: ${toolName}]\x1b[0m\n`);
+                                if (currentToolParams && Object.keys(currentToolParams).length > 0) {
+                                    process.stdout.write(`\x1b[90m${JSON.stringify(currentToolParams)}\x1b[0m\n`);
                                 }
                                 // Intercept ask_question to display to user
-                                if (parsed.step_update.tool_name === 'ask_question' && parsed.step_update.tool_info && parsed.step_update.tool_info.parameters) {
-                                    const params = parsed.step_update.tool_info.parameters;
+                                if (toolName === 'ask_question' && currentToolParams.questions) {
                                     let promptText = `**AGY has a question:**\n\n`;
-                                    if (params.questions) {
-                                        params.questions.forEach(q => {
-                                            promptText += `*${q.question}*\n`;
-                                            if (q.options) {
-                                                q.options.forEach((opt, i) => promptText += `  ${i+1}. ${opt}\n`);
-                                            }
-                                        });
-                                    }
+                                    currentToolParams.questions.forEach(q => {
+                                        promptText += `*${q.question}*\n`;
+                                        if (q.options) {
+                                            q.options.forEach((opt, i) => promptText += `  ${i+1}. ${opt}\n`);
+                                        }
+                                    });
                                     promptText += `\n*(Reply using \`!agy reply <your answer>\`)*`;
                                     postMessage(roomId, tmid, promptText);
                                 }
                             } else if (parsed.step_update.state === 'DONE') {
-                                if (parsed.step_update.tool_name === 'generate_image') {
+                                const toolName = parsed.step_update.tool_name;
+                                if (toolName === 'generate_image') {
                                     imageGenerationCount++;
                                 }
-                                currentStatus = "Thinking...";
-                                process.stdout.write(`\x1b[32m[Tool Finished: ${parsed.step_update.tool_name}]\x1b[0m\n`);
+                                const summary = formatToolSummary(toolName, currentToolParams);
+                                recentActions.push(summary);
+                                if (recentActions.length > 3) recentActions.shift();
+                                currentStatus = "*Thinking / Planning next action...*";
+                                process.stdout.write(`\x1b[32m[Tool Finished: ${toolName}]\x1b[0m\n`);
                             }
                         } else if (parsed.step_update.thinking_delta) {
-                            currentStatus = "Thinking...";
+                            if (!currentStatus.startsWith('*Thinking')) {
+                                currentStatus = "*Thinking / Planning next action...*";
+                            }
                             process.stdout.write(`\x1b[90m${parsed.step_update.thinking_delta}\x1b[0m`);
                         } else if (parsed.step_update.text_delta) {
-                            currentStatus = "Writing response...";
+                            currentStatus = "*Writing response...*";
                             process.stdout.write(parsed.step_update.text_delta);
                         }
                     } else if (parsed.event === 'result') {
