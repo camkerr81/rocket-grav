@@ -43,11 +43,9 @@ const MODEL_ALIASES = {
 
 const threadsFile = '/workspace/threads.json';
 
-// Fetch env vars for API access
-const ROCKETCHAT_URL = process.env.ROCKETCHAT_URL || 'http://rocketchat.example.com:3000';
-const ROCKETCHAT_USER_ID = process.env.ROCKETCHAT_USER_ID;
-const ROCKETCHAT_PAT = process.env.ROCKETCHAT_PAT;
-const ROCKETCHAT_TOKEN = process.env.ROCKETCHAT_TOKEN;
+const { getAdapter } = require('./adapters');
+const adapter = getAdapter();
+console.log(`[Rocket-Grav] Initialized with chat adapter: ${adapter.name.toUpperCase()}`);
 
 function getThreads() {
     if (fs.existsSync(threadsFile)) {
@@ -62,49 +60,9 @@ function saveThreads(data) {
     fs.writeFileSync(threadsFile, JSON.stringify(data, null, 2));
 }
 
-async function postMessage(roomId, tmid, text) {
-    if (!ROCKETCHAT_USER_ID || !ROCKETCHAT_PAT) {
-        console.warn("Missing API credentials. Cannot post message.");
-        return null;
-    }
-    const payload = { roomId, text, alias: 'MangoBot', emoji: ':robot:' };
-    if (tmid) payload.tmid = tmid;
-
-    try {
-        const response = await fetch(`${ROCKETCHAT_URL}/api/v1/chat.postMessage`, {
-            method: 'POST',
-            headers: {
-                'X-Auth-Token': ROCKETCHAT_PAT,
-                'X-User-Id': ROCKETCHAT_USER_ID,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(payload)
-        });
-        const data = await response.json();
-        return data.success ? data.message._id : null;
-    } catch (e) {
-        console.error("Error posting message:", e);
-        return null;
-    }
-}
-
-async function updateMessage(roomId, msgId, text) {
-    if (!ROCKETCHAT_USER_ID || !ROCKETCHAT_PAT || !msgId) return;
-
-    try {
-        await fetch(`${ROCKETCHAT_URL}/api/v1/chat.update`, {
-            method: 'POST',
-            headers: {
-                'X-Auth-Token': ROCKETCHAT_PAT,
-                'X-User-Id': ROCKETCHAT_USER_ID,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ roomId, msgId, text })
-        });
-    } catch (e) {
-        console.error("Error updating message:", e);
-    }
-}
+// Wrapper calls that delegate to the active chat provider adapter
+const postMessage = (roomId, tmid, text) => adapter.postMessage(roomId, tmid, text);
+const updateMessage = (roomId, msgId, text) => adapter.updateMessage(roomId, msgId, text);
 
 // Middleware to filter requests by IP
 const ipFilter = (req, res, next) => {
@@ -128,22 +86,22 @@ const ipFilter = (req, res, next) => {
 app.use(ipFilter);
 
 app.post('/webhook', async (req, res) => {
-    const providedToken = req.body.token;
+    // Handle Slack URL challenge if applicable
+    if (req.body && req.body.type === 'url_verification') {
+        return res.json({ challenge: req.body.challenge });
+    }
 
-    if (!providedToken || providedToken !== ROCKETCHAT_TOKEN) {
-        console.warn('Unauthorized request received (invalid token).');
+    if (!adapter.verifyRequest(req)) {
+        console.warn(`Unauthorized request received on ${adapter.name} adapter (invalid token/signature).`);
         return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // Acknowledge the webhook immediately so Rocket.Chat doesn't time out
-    // Returning empty text prevents Rocket.Chat from sending a default webhook reply.
+    // Acknowledge the webhook immediately so chat platform doesn't time out
     res.json({}); 
 
-    const roomId = req.body.channel_id;
-    // Only pass tmid if the original message was already in a thread
-    const tmid = req.body.tmid;
+    const { text: rawText, roomId, tmid } = adapter.extractPayload(req);
 
-    let messageText = req.body.text || '';
+    let messageText = rawText || '';
     messageText = messageText.replace(/^(?:@\w+|!\w+)\s+/, '').trim();
 
     if (!messageText) {

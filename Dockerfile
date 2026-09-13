@@ -22,8 +22,9 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm install
 
-# Copy server code and binaries
+# Copy server code, adapters and binaries
 COPY server.js ./
+COPY adapters/ ./adapters/
 COPY bin/bd /usr/local/bin/bd
 RUN chmod +x /usr/local/bin/bd
 
