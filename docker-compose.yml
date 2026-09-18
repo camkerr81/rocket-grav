@@ -20,7 +20,7 @@ services:
       - GITEA_PAT=${GITEA_PAT:-}
       - GEMINI_API=${GEMINI_API:-}
       - BW_CLIENTID=${BW_CLIENTID:-}
-      - BW_CLIENTSECRET=$(BW_CLIENTSECRET:-)
+      - BW_CLIENTSECRET=${BW_CLIENTSECRET:-}
     volumes:
       - ./workspace:/workspace
       - ./.gemini:/root/.gemini
