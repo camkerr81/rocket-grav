@@ -1,4 +1,3 @@
-
 services:
   agy-bridge:
     build: .
@@ -20,6 +19,8 @@ services:
       - SLACK_VERIFICATION_TOKEN=${SLACK_VERIFICATION_TOKEN:-}
       - GITEA_PAT=${GITEA_PAT:-}
       - GEMINI_API=${GEMINI_API:-}
+      - BW_CLIENTID=${BW_CLIENTID:-}
+      - BW_CLIENTSECRET=$(BW_CLIENTSECRET:-)
     volumes:
       - ./workspace:/workspace
       - ./.gemini:/root/.gemini
