@@ -42,10 +42,12 @@ By bridging chat platforms directly to a containerized Antigravity CLI runtime:
 
 ### Core Capabilities
 
+* • **Hybrid Mode & Local Ollama Offloading:** Intelligently offloads lighter questions, syntax lookups, and informational queries to a local Ollama instance (e.g. `qwen3:8b`), saving cloud quota while instantly returning results. Complex coding, refactoring, and tool execution automatically route to AGY.
+* • **Model Context Protocol (MCP) Integration:** Bundled zero-dependency MCP server (`mcp/ollama-mcp.js` / `ollama-mcp`) allows Antigravity itself to query local Ollama models as sub-tools for fast summarization, translation, and reasoning tasks.
 * • **Modular Chat Adapters:** Built with a pluggable adapter architecture. Switch between **Rocket.Chat**, **Mattermost**, or **Slack** with a single configuration variable (`CHAT_PROVIDER`).
 * • **Live Animated Progress:** Updates messages in-place with real-time Braille status spinners (`⠋`, `⠙`, `⠹`...) and tool descriptions (`Running run_command...`, `Thinking...`).
 * • **Interactive Stdin Piping:** Intercepts agent interactive questions (`ask_question`) and allows users to reply directly (`!agy reply <choice>`), piping answers into the running process.
-* • **On-The-Fly Model Switching:** Switch underlying language models anytime (`!agy model switch claude`, `flash`, `gemini`, `gpt`) to navigate quota limits or optimize reasoning depth.
+* • **On-The-Fly Model Switching:** Switch underlying language models anytime (`!agy model switch claude`, `flash`, `gemini`, `gpt`) or Ollama models (`!agy ollama switch qwen3:8b`).
 * • **Isolated Thread Sessions:** Manages multiple conversation threads and contexts independently via `threads.json`.
 * • **Automatic Issue Tracking:** Automatically identifies bug/feature requests and registers them in the integrated [Beads](https://github.com/steven-tey/beads) issue tracker (`bd create`).
 * • **Auto-Retry Resilience:** Automatically retries failing CLI invocations up to 3 times, surfacing complete JSON trace dumps if hard errors persist.
@@ -213,14 +215,63 @@ Dynamically select language models without restarting the container:
 | `gpt` | `gpt-oss-120b-medium` | GPT-OSS 120B |
 | `<custom-id>` | `<any raw model id>` | Pass any valid model string directly |
 
-### 5. Thread & Context Management
+### 5. Hybrid Mode & Local Ollama MCP Integration
+
+Rocket-Grav features an intelligent **Hybrid Mode** that allows offloading lighter task processing, code explanations, syntax lookups, and fast Q&A to a local **Ollama** server (`http://192.168.8.194:11434`), reserving Antigravity's autonomous agent engine for heavy code generation, workspace manipulation, multi-file edits, and tool runs.
+
+#### Bridge Routing Modes
+
+| Mode | Behavior |
+|---|---|
+| `HYBRID` (Default) | Smart Auto-Routing: Questions & light tasks route to local Ollama. Code edits, file creation, bash commands, tests, and beads issues route to AGY. |
+| `AGY` | Classic Mode: Every prompt is routed through the Antigravity CLI agent runtime. |
+| `OLLAMA` | Local-Only Mode: Prompts are answered directly by local Ollama models on LAN. |
+
+#### Hybrid & Ollama Commands
+
+| Command | Description | Example |
+|---|---|---|
+| `!agy mode` | Displays current operating mode, AGY model, and Ollama status. | `!agy mode` |
+| `!agy mode <hybrid\|agy\|ollama>` | Switches the bridge operating mode on the fly. | `!agy mode hybrid` |
+| `!agy ollama <prompt>` (or `!ollama`, `!ask`) | Sends prompt directly to local Ollama, bypassing AGY. | `!agy ollama explain regex lookbehind` |
+| `!agy full <prompt>` | Forces execution through full AGY CLI (bypasses Ollama). | `!agy full what is this repo about?` |
+| `!agy ollama list` / `!agy ollama models` | Displays all models installed on the local Ollama instance. | `!agy ollama list` |
+| `!agy ollama switch <model>` | Changes the active Ollama model (e.g. `qwen3:8b`, `phi4-mini:latest`). | `!agy ollama switch phi4-mini:latest` |
+| `!agy ollama ping` / `status` | Checks HTTP connection and latency to local Ollama server. | `!agy ollama ping` |
+
+#### Antigravity MCP Server (`ollama-mcp`)
+
+Rocket-Grav includes a bundled Model Context Protocol (MCP) server located in `mcp/ollama-mcp.js` (aliased as `ollama-mcp`). When Antigravity executes autonomous tasks, it has direct access to local Ollama models via MCP tools:
+
+* • `ask_ollama`: Ask quick questions or offload reasoning/summarization to local models.
+* • `run`: Run completions on local models (e.g., `qwen3:8b`, `phi4-mini:latest`).
+* • `chat_completion`: OpenAI-compatible multi-turn chat completion.
+* • `list_models`: Discovers available models on the Ollama endpoint.
+
+**Configuration (`.gemini/config/mcp_config.json`):**
+```json
+{
+  "mcpServers": {
+    "ollama-mcp": {
+      "command": "node",
+      "args": [
+        "/app/mcp/ollama-mcp.js",
+        "--endpoint",
+        "http://192.168.8.194:11434"
+      ]
+    }
+  }
+}
+```
+
+### 6. Thread & Context Management
 
 | Command | Description | Example |
 |---|---|---|
 | `!agy threads` / `!agy thread list` | Lists all threads and marks the active one. | `!agy threads` |
 | `!agy thread switch <name>` | Switches to an existing thread or creates a new one. | `!agy thread switch auth-refactor` |
 
-### 6. Diagnostics & Endpoints
+### 7. Diagnostics & Endpoints
 
 * • `!agy log` / `!agy logs`: Tails the last 25 lines of the active thread's `transcript.jsonl`.
 * • `POST /webhook`: Inbound webhook endpoint for chat platforms or external automation scripts.
@@ -235,6 +286,7 @@ Dynamically select language models without restarting the container:
 * • Docker and Docker Compose (or Portainer / Dockhand).
 * • A Google account with Antigravity CLI access.
 * • An active instance of Rocket.Chat, Mattermost, or Slack.
+* • (Optional for Hybrid Mode) A local Ollama instance on your LAN.
 
 ### 2. Environment Variables
 
@@ -246,6 +298,9 @@ Configure your `.env` file according to your selected provider:
 |---|---|---|
 | `CHAT_PROVIDER` | Active adapter (`rocketchat`, `mattermost`, `slack`). | `rocketchat` |
 | `BOT_NAME` | Bot username / alias displayed in messages. | `MangoBot` |
+| `HYBRID_MODE` | Enable smart auto-routing between Ollama and AGY (`true`/`false`). | `true` |
+| `OLLAMA_URL` | Base URL of your local Ollama instance. | `http://192.168.8.194:11434` |
+| `OLLAMA_MODEL` | Default model for local Ollama queries. | `qwen3:8b` |
 | `GEMINI_API` | (Optional) Gemini API key for external tooling. | — |
 | `GITEA_PAT` | (Optional) Personal access token for Gitea automation. | — |
 | `ALLOWED_IPS` | (Optional) Comma-separated list of additional allowed client IPs/subnets. | — |

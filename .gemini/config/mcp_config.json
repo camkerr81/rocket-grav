@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "ollama-mcp": {
+      "command": "node",
+      "args": [
+        "/app/mcp/ollama-mcp.js",
+        "--endpoint",
+        "http://192.168.8.194:11434"
+      ]
+    }
+  }
+}

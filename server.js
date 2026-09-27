@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const app = express();
-const port = 8080;
+const port = process.env.PORT || 8080;
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -23,6 +23,11 @@ app.get('/assets', (req, res) => {
 
 const activeProcesses = {};
 let currentModel = null; // null = use default subscription model
+
+// Bridge operating mode: 'hybrid' (smart offloading), 'agy' (Antigravity CLI only), or 'ollama' (Ollama only)
+let bridgeMode = (process.env.HYBRID_MODE === 'false' || process.env.HYBRID_MODE === '0') ? 'agy' : 'hybrid';
+let ollamaUrl = (process.env.OLLAMA_URL || 'http://192.168.8.194:11434').replace(/\/+$/, '');
+let ollamaModel = process.env.OLLAMA_MODEL || 'qwen3:8b';
 
 // Shorthand aliases for quick model switching
 const MODEL_ALIASES = {
@@ -47,6 +52,8 @@ const { getAdapter } = require('./adapters');
 const adapter = getAdapter();
 console.log(`[Rocket-Grav] Initialized with chat adapter: ${adapter.name.toUpperCase()}`);
 if (adapter.url) console.log(`[Rocket-Grav] Target chat server URL: ${adapter.url}`);
+console.log(`[Rocket-Grav] Bridge Operating Mode: ${bridgeMode.toUpperCase()}`);
+console.log(`[Rocket-Grav] Local Ollama Target: ${ollamaUrl} (default model: ${ollamaModel})`);
 
 function getThreads() {
     if (fs.existsSync(threadsFile)) {
@@ -132,210 +139,157 @@ function formatToolSummary(toolName, params = {}) {
 const postMessage = (roomId, tmid, text) => adapter.postMessage(roomId, tmid, text);
 const updateMessage = (roomId, msgId, text) => adapter.updateMessage(roomId, msgId, text);
 
-// Middleware to filter requests by IP
-const ipFilter = (req, res, next) => {
-    if (process.env.DISABLE_IP_FILTER === 'true') {
-        return next();
+async function pingOllama() {
+    try {
+        const startTime = Date.now();
+        const res = await fetch(`${ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(4000) });
+        const latency = Date.now() - startTime;
+        if (!res.ok) return { ok: false, error: `HTTP ${res.status}`, latency };
+        const data = await res.json();
+        return { ok: true, latency, models: (data.models || []).map(m => m.name) };
+    } catch (e) {
+        return { ok: false, error: e.message, latency: -1 };
+    }
+}
+
+async function listOllamaModels() {
+    const res = await fetch(`${ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(6000) });
+    if (!res.ok) throw new Error(`Ollama HTTP ${res.status}`);
+    const data = await res.json();
+    return data.models || [];
+}
+
+async function queryOllama(prompt, options = {}) {
+    const model = options.model || ollamaModel;
+    const body = {
+        model,
+        prompt,
+        stream: false
+    };
+    if (options.system) body.system = options.system;
+    if (options.think !== undefined) body.think = options.think;
+
+    const res = await fetch(`${ollamaUrl}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(options.timeoutMs || 60000)
+    });
+
+    if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`Ollama HTTP ${res.status}: ${errText}`);
     }
 
-    const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
-    const envAllowed = process.env.ALLOWED_IPS 
-        ? process.env.ALLOWED_IPS.split(',').map(s => s.trim()).filter(Boolean)
-        : [];
-    
-    // Allow localhost, standard private networks (RFC1918), and Docker subnets by default
-    const isAllowed = 
-        envAllowed.includes('*') ||
-        clientIp.includes('127.0.0.1') || 
-        clientIp.includes('::1') ||
-        clientIp.includes('192.168.') ||
-        clientIp.includes('10.') ||
-        clientIp.startsWith('::ffff:172.') || 
-        clientIp.startsWith('172.') ||
-        envAllowed.some(allowed => clientIp.includes(allowed) || clientIp.startsWith(allowed));
-        
-    if (!isAllowed) {
-        console.warn(`[Rocket-Grav] Blocked request from unauthorized IP: ${clientIp}`);
-        return res.status(403).json({ error: 'Forbidden' });
-    }
-    next();
-};
+    const data = await res.json();
+    return {
+        text: data.response || '',
+        thinking: data.thinking || '',
+        model: data.model || model,
+        totalDuration: data.total_duration
+    };
+}
 
-app.use(ipFilter);
+/**
+ * Classifies a prompt into 'light' (can offload to local Ollama) vs 'heavy' (needs full AGY workspace tools).
+ */
+function classifyTask(prompt) {
+    const text = (prompt || '').trim();
 
-app.post('/webhook', async (req, res) => {
-    // Handle Slack URL challenge if applicable
-    if (req.body && req.body.type === 'url_verification') {
-        return res.json({ challenge: req.body.challenge });
-    }
+    // Forced overrides
+    if (/^(?:force-agy|full|agy)\s+/i.test(text)) return 'heavy';
+    if (/^(?:force-ollama|ollama|ask)\s+/i.test(text)) return 'light';
 
-    if (!adapter.verifyRequest(req)) {
-        console.warn(`Unauthorized request received on ${adapter.name} adapter (invalid token/signature).`);
-        return res.status(401).json({ error: 'Unauthorized' });
-    }
+    // Patterns indicating code/workspace manipulation, bash commands, tests, builds, beads, git
+    const heavyPatterns = [
+        /\b(?:fix|implement|refactor|debug|build|compile)\b/i,
+        /\b(?:create|make|write|edit|update|delete|remove|modify)\s+(?:a\s+)?(?:file|code|component|function|class|test|script|endpoint)\b/i,
+        /\b(?:run|execute)\s+(?:command|script|test|build|npm|yarn|cargo|docker|bash)\b/i,
+        /\b(?:git\s+|commit|push|pull|merge|branch|checkout|stash)\b/i,
+        /\b(?:docker|docker-compose|dockerfile|container)\b/i,
+        /\b(?:beads|bd\s+|issue|epic)\b/i,
+        /\b[a-zA-Z0-9_\-\.]+\.(?:js|ts|jsx|tsx|json|yml|yaml|md|py|go|rs|sh|css|html)\b/i,
+        /`{1,3}[\s\S]*?`{1,3}/ // Inline or fenced code blocks often mean refactoring/fixing code
+    ];
 
-    // Acknowledge the webhook immediately so chat platform doesn't time out
-    res.json({}); 
-
-    const { text: rawText, roomId, tmid } = adapter.extractPayload(req);
-
-    let messageText = rawText || '';
-    messageText = messageText.replace(/^(?:@\w+|!\w+)\s+/, '').trim();
-
-    if (!messageText) {
-        await postMessage(roomId, tmid, "Please provide a prompt.");
-        return;
-    }
-
-    console.log(`\n--- NEW REQUEST ---`);
-    console.log(`Received prompt: ${messageText}`);
-
-    if (messageText === 'help') {
-        const helpText = `**AGY Bridge Commands**
-*   \`!agy <prompt>\` - Send a prompt to AGY in the current thread
-*   \`!agy reply <answer>\` - Reply to an interactive question asked by AGY
-*   \`!agy model\` - Show the current model
-*   \`!agy model list\` (or \`models\`) - List available models
-*   \`!agy model switch <name>\` - Switch model (e.g. \`claude\`, \`flash\`, \`gemini\`, \`default\`)
-*   \`!agy thread list\` (or \`threads\`) - List all available threads and show the active one
-*   \`!agy thread switch <name>\` - Switch to an existing thread or create a new one
-*   \`!agy log\` - Show the last few log entries of the active thread's transcript
-*   \`!agy issues\` (or \`beads\`) - List all open beads issues
-*   \`!agy help\` - Show this help message`;
-        await postMessage(roomId, tmid, helpText);
-        return;
-    }
-
-    if (messageText.toLowerCase() === 'model') {
-        await postMessage(roomId, tmid, `Current model: **${currentModel || 'default (subscription)'}**`);
-        return;
-    }
-
-    if (messageText.toLowerCase() === 'models' || messageText.toLowerCase() === 'model list') {
-        let reply = '**Available Models:**\n';
-        reply += '| Shortcut | Full Model ID |\n|---|---|\n';
-        for (const [alias, modelId] of Object.entries(MODEL_ALIASES)) {
-            reply += `| \`${alias}\` | ${modelId || '*(subscription default)*'} |\n`;
+    for (const pattern of heavyPatterns) {
+        if (pattern.test(text)) {
+            return 'heavy';
         }
-        reply += `\nCurrent: **${currentModel || 'default (subscription)'}**`;
-        reply += `\nSwitch with: \`!agy model switch <name>\``;
-        await postMessage(roomId, tmid, reply);
-        return;
     }
 
-    if (messageText.toLowerCase().startsWith('model switch ') || messageText.toLowerCase().startsWith('model use ')) {
-        const requestedModel = messageText.split(' ').slice(2).join(' ').trim().toLowerCase();
-        if (MODEL_ALIASES.hasOwnProperty(requestedModel)) {
-            currentModel = MODEL_ALIASES[requestedModel];
-            await postMessage(roomId, tmid, `[✓] Switched to: **${currentModel || 'default (subscription)'}**`);
+    // Patterns indicating informational questions, explanations, summaries, or conversational queries
+    const lightPatterns = [
+        /^(?:what|why|how|who|when|where|which|whose)\b/i,
+        /^(?:can\s+you\s+explain|explain|describe|tell\s+me\s+about|what's\s+the\s+difference|compare)\b/i,
+        /^(?:summarize|translate|format|suggest|draft|rephrase|proofread|calculate)\b/i,
+        /^(?:hello|hi|hey|good\s+morning|good\s+evening|ping|status)\b/i,
+        /\?$/ // Ends with question mark
+    ];
+
+    for (const pattern of lightPatterns) {
+        if (pattern.test(text)) {
+            return 'light';
+        }
+    }
+
+    // If text is short (< 80 chars) and has no heavy verbs, treat as light question/chat
+    if (text.length < 80 && !/\b(?:run|write|build|fix|test|git)\b/i.test(text)) {
+        return 'light';
+    }
+
+    // Default to heavy (safe bet: route to AGY agent)
+    return 'heavy';
+}
+
+async function executeOllamaMessage(roomId, tmid, promptText, customModel = null, fallbackToAgy = null) {
+    const targetModel = customModel || ollamaModel;
+    const thinkingMsgId = await postMessage(roomId, tmid, `\`⠋\` *Offloading to local Ollama (${targetModel})...*`);
+    const startTime = Date.now();
+
+    try {
+        const result = await queryOllama(promptText, { model: targetModel });
+        const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
+        let reply = `[⚡ **Local Ollama** (\`${targetModel}\` • ${elapsedSec}s)]\n\n`;
+        if (result.thinking) {
+            reply += `> *Thought Process:*\n> ${result.thinking.trim().replace(/\n/g, '\n> ')}\n\n`;
+        }
+        reply += result.text;
+        if (reply.length > 7000) {
+            reply = reply.substring(0, 7000) + '\n...[output truncated]';
+        }
+        if (thinkingMsgId) {
+            await updateMessage(roomId, thinkingMsgId, reply);
         } else {
-            // Assume they passed a full model ID directly
-            currentModel = requestedModel;
-            await postMessage(roomId, tmid, `[✓] Switched to: **${currentModel}**\n*(Note: using raw model ID — make sure this is valid)*`);
+            await postMessage(roomId, tmid, reply);
         }
-        return;
-    }
-
-    if (messageText.toLowerCase().startsWith('reply ') || messageText.toLowerCase().startsWith('answer ')) {
-        const data = getThreads();
-        const convId = data.threads[data.active_thread];
-        if (convId && activeProcesses[convId]) {
-            const answer = messageText.split(' ').slice(1).join(' ');
-            activeProcesses[convId].stdin.write(answer + '\n');
-            await postMessage(roomId, tmid, `Sent reply: **${answer}**`);
-        } else {
-            await postMessage(roomId, tmid, 'No active process found for this thread to reply to.');
-        }
-        return;
-    }
-
-    if (messageText.toLowerCase() === 'issues' || messageText.toLowerCase() === 'beads') {
-        try {
-            const { execFileSync } = require('child_process');
-            if (!fs.existsSync('/workspace/.beads')) {
-                await postMessage(roomId, tmid, 'No Beads project initialized yet.');
-                return;
-            }
-            const bdPath = fs.existsSync('/usr/local/bin/bd') ? '/usr/local/bin/bd' : 'bd';
-            const stdout = execFileSync(bdPath, ['list'], { cwd: '/workspace' }).toString();
-            await postMessage(roomId, tmid, `**Current Issues:**\n\`\`\`text\n${stdout.trim() || 'No open issues.'}\n\`\`\``);
-        } catch (e) {
-            const errOut = e.stdout ? e.stdout.toString() : e.message;
-            await postMessage(roomId, tmid, `Error retrieving beads:\n\`\`\`text\n${errOut.trim()}\n\`\`\``);
-        }
-        return;
-    }
-
-    if (messageText === 'log' || messageText === 'logs') {
-        const data = getThreads();
-        const convId = data.threads[data.active_thread];
-        if (!convId) {
-            await postMessage(roomId, tmid, 'No active conversation found for this thread.');
-            return;
-        }
-        
-        const logPath = `/root/.gemini/antigravity-cli/brain/${convId}/.system_generated/logs/transcript.jsonl`;
-        if (!fs.existsSync(logPath)) {
-            await postMessage(roomId, tmid, 'Log file not found. Have you sent a prompt in this thread yet?');
-            return;
-        }
-        
-        const thinkingMsgId = await postMessage(roomId, tmid, "`⠋` *Fetching logs...*");
-        const { exec } = require('child_process');
-        exec(`tail -n 25 ${logPath}`, async (error, stdout) => {
-            let output = stdout.substring(0, 7000);
-            if (error) output = `Error: ${error.message}`;
+    } catch (err) {
+        console.error(`[Rocket-Grav] Ollama error: ${err.message}`);
+        if (fallbackToAgy) {
+            console.log(`[Rocket-Grav] Falling back to AGY for prompt: "${promptText}"`);
             if (thinkingMsgId) {
-                await updateMessage(roomId, thinkingMsgId, '```json\n' + output + '\n```');
+                await updateMessage(roomId, thinkingMsgId, `\`⠋\` *Local Ollama unavailable (${err.message}). Falling back to Antigravity (AGY)...*`);
             }
-        });
-        return;
-    }
-
-    if (messageText === 'threads' || messageText === 'thread list') {
-        const data = getThreads();
-        let reply = 'Available threads:\n-----------------\n';
-        const threadNames = Object.keys(data.threads);
-        if (threadNames.length === 0) reply += '(no active threads yet)\n';
-        for (const name of threadNames) {
-            reply += `${name === data.active_thread ? '*' : ' '} ${name}\n`;
-        }
-        reply += `\nCurrently active: ${data.active_thread}`;
-        await postMessage(roomId, tmid, '```text\n' + reply + '\n```');
-        return;
-    }
-
-    if (messageText.startsWith('thread switch ') || messageText.startsWith('thread checkout ')) {
-        const name = messageText.split(' ')[2].trim();
-        const data = getThreads();
-        data.active_thread = name;
-        saveThreads(data);
-        await postMessage(roomId, tmid, '```text\nSwitched to thread: ' + name + '\n```');
-        return;
-    }
-
-    // Beads integration: automatically log bugs/features
-    const lowerText = messageText.toLowerCase();
-    if (lowerText.startsWith('bug ') || lowerText.startsWith('feature ') || lowerText.startsWith('fix ') || lowerText.startsWith('add ') || lowerText.startsWith('issue ')) {
-        try {
-            const { execSync } = require('child_process');
-            const bdPath = fs.existsSync('/usr/local/bin/bd') ? '/usr/local/bin/bd' : 'bd';
-            if (!fs.existsSync('/workspace/.beads')) {
-                execSync(`${bdPath} init`, { cwd: '/workspace' });
+            fallbackToAgy(thinkingMsgId);
+        } else {
+            const errReply = `**Ollama Error:** ${err.message}\nMake sure your Ollama instance at \`${ollamaUrl}\` is reachable.`;
+            if (thinkingMsgId) {
+                await updateMessage(roomId, thinkingMsgId, errReply);
+            } else {
+                await postMessage(roomId, tmid, errReply);
             }
-            const activeThread = getThreads().active_thread;
-            const title = messageText.replace(/"/g, '\\"');
-            const stdout = execSync(`${bdPath} create "[Epic: ${activeThread}] ${title}"`, { cwd: '/workspace' }).toString();
-            await postMessage(roomId, tmid, `[✓] Logged to Beads Issue Tracker:\n\`\`\`text\n${stdout.trim()}\n\`\`\``);
-        } catch (e) {
-            console.error("Beads error:", e.message);
         }
     }
+}
 
-    // Post the placeholder spinner message
-    const thinkingMsgId = await postMessage(roomId, tmid, "`⠋` *AGY is thinking...*");
+async function runAgySession(roomId, tmid, messageText, existingMsgId = null) {
+    // Post the placeholder spinner message if not already existing
+    let thinkingMsgId = existingMsgId;
     if (!thinkingMsgId) {
-        console.warn(`[Rocket-Grav] Warning: Failed to send initial placeholder message to room ${roomId}. Check bot credentials (ROCKETCHAT_USER_ID, ROCKETCHAT_PAT) and ROCKETCHAT_URL.`);
+        thinkingMsgId = await postMessage(roomId, tmid, "`⠋` *AGY is thinking...*");
+        if (!thinkingMsgId) {
+            console.warn(`[Rocket-Grav] Warning: Failed to send initial placeholder message to room ${roomId}. Check bot credentials (ROCKETCHAT_USER_ID, ROCKETCHAT_PAT) and ROCKETCHAT_URL.`);
+        }
     }
     
     // Setup animation loop
@@ -526,6 +480,348 @@ app.post('/webhook', async (req, res) => {
     };
 
     executeAgy(1);
+}
+
+// Middleware to filter requests by IP
+const ipFilter = (req, res, next) => {
+    if (process.env.DISABLE_IP_FILTER === 'true') {
+        return next();
+    }
+
+    const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
+    const envAllowed = process.env.ALLOWED_IPS 
+        ? process.env.ALLOWED_IPS.split(',').map(s => s.trim()).filter(Boolean)
+        : [];
+    
+    // Allow localhost, standard private networks (RFC1918), and Docker subnets by default
+    const isAllowed = 
+        envAllowed.includes('*') ||
+        clientIp.includes('127.0.0.1') || 
+        clientIp.includes('::1') ||
+        clientIp.includes('192.168.') ||
+        clientIp.includes('10.') ||
+        clientIp.startsWith('::ffff:172.') || 
+        clientIp.startsWith('172.') ||
+        envAllowed.some(allowed => clientIp.includes(allowed) || clientIp.startsWith(allowed));
+        
+    if (!isAllowed) {
+        console.warn(`[Rocket-Grav] Blocked request from unauthorized IP: ${clientIp}`);
+        return res.status(403).json({ error: 'Forbidden' });
+    }
+    next();
+};
+
+app.use(ipFilter);
+
+app.post('/webhook', async (req, res) => {
+    // Handle Slack URL challenge if applicable
+    if (req.body && req.body.type === 'url_verification') {
+        return res.json({ challenge: req.body.challenge });
+    }
+
+    if (!adapter.verifyRequest(req)) {
+        console.warn(`Unauthorized request received on ${adapter.name} adapter (invalid token/signature).`);
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // Acknowledge the webhook immediately so chat platform doesn't time out
+    res.json({}); 
+
+    const { text: rawText, roomId, tmid } = adapter.extractPayload(req);
+
+    let messageText = rawText || '';
+    messageText = messageText.replace(/^(?:@\w+|!\w+)\s+/, '').trim();
+
+    if (!messageText) {
+        await postMessage(roomId, tmid, "Please provide a prompt.");
+        return;
+    }
+
+    console.log(`\n--- NEW REQUEST ---`);
+    console.log(`Received prompt: ${messageText}`);
+
+    if (messageText === 'help') {
+        const helpText = `**AGY Bridge Commands**
+*   \`!agy <prompt>\` - Send a prompt (auto-routed in Hybrid mode: light tasks/questions → local Ollama; complex code/tools → AGY)
+*   \`!agy mode\` - Show current bridge operating mode and Ollama connection status
+*   \`!agy mode <hybrid|agy|ollama>\` - Switch bridge mode (e.g. \`!agy mode hybrid\`, \`!agy mode agy\`)
+*   \`!agy ollama <prompt>\` (or \`!ollama\`, \`!ask\`) - Send prompt directly to local Ollama
+*   \`!agy ollama list\` (or \`models\`) - List available models on local Ollama
+*   \`!agy ollama switch <name>\` - Switch active Ollama model (e.g. \`qwen3:8b\`, \`phi4-mini:latest\`)
+*   \`!agy ollama ping\` - Test connectivity and latency to local Ollama instance
+*   \`!agy full <prompt>\` - Force execution through full AGY CLI (bypass Ollama offloading)
+*   \`!agy reply <answer>\` - Reply to an interactive question asked by AGY
+*   \`!agy model\` - Show the current AGY model
+*   \`!agy model list\` (or \`models\`) - List available AGY models
+*   \`!agy model switch <name>\` - Switch AGY model (e.g. \`claude\`, \`flash\`, \`gemini\`, \`default\`)
+*   \`!agy thread list\` (or \`threads\`) - List all available threads and show the active one
+*   \`!agy thread switch <name>\` - Switch to an existing thread or create a new one
+*   \`!agy log\` - Show the last few log entries of the active thread's transcript
+*   \`!agy issues\` (or \`beads\`) - List all open beads issues
+*   \`!agy help\` - Show this help message`;
+        await postMessage(roomId, tmid, helpText);
+        return;
+    }
+
+    if (messageText.toLowerCase() === 'model') {
+        await postMessage(roomId, tmid, `Current model: **${currentModel || 'default (subscription)'}**`);
+        return;
+    }
+
+    if (messageText.toLowerCase() === 'models' || messageText.toLowerCase() === 'model list') {
+        let reply = '**Available Models:**\n';
+        reply += '| Shortcut | Full Model ID |\n|---|---|\n';
+        for (const [alias, modelId] of Object.entries(MODEL_ALIASES)) {
+            reply += `| \`${alias}\` | ${modelId || '*(subscription default)*'} |\n`;
+        }
+        reply += `\nCurrent: **${currentModel || 'default (subscription)'}**`;
+        reply += `\nSwitch with: \`!agy model switch <name>\``;
+        await postMessage(roomId, tmid, reply);
+        return;
+    }
+
+    if (messageText.toLowerCase().startsWith('model switch ') || messageText.toLowerCase().startsWith('model use ')) {
+        const requestedModel = messageText.split(' ').slice(2).join(' ').trim().toLowerCase();
+        if (MODEL_ALIASES.hasOwnProperty(requestedModel)) {
+            currentModel = MODEL_ALIASES[requestedModel];
+            await postMessage(roomId, tmid, `[✓] Switched to: **${currentModel || 'default (subscription)'}**`);
+        } else {
+            // Assume they passed a full model ID directly
+            currentModel = requestedModel;
+            await postMessage(roomId, tmid, `[✓] Switched to: **${currentModel}**\n*(Note: using raw model ID — make sure this is valid)*`);
+        }
+        return;
+    }
+
+    if (messageText.toLowerCase().startsWith('reply ') || messageText.toLowerCase().startsWith('answer ')) {
+        const data = getThreads();
+        const convId = data.threads[data.active_thread];
+        if (convId && activeProcesses[convId]) {
+            const answer = messageText.split(' ').slice(1).join(' ');
+            activeProcesses[convId].stdin.write(answer + '\n');
+            await postMessage(roomId, tmid, `Sent reply: **${answer}**`);
+        } else {
+            await postMessage(roomId, tmid, 'No active process found for this thread to reply to.');
+        }
+        return;
+    }
+
+    if (messageText.toLowerCase() === 'issues' || messageText.toLowerCase() === 'beads') {
+        try {
+            const { execFileSync } = require('child_process');
+            if (!fs.existsSync('/workspace/.beads')) {
+                await postMessage(roomId, tmid, 'No Beads project initialized yet.');
+                return;
+            }
+            const bdPath = fs.existsSync('/usr/local/bin/bd') ? '/usr/local/bin/bd' : 'bd';
+            const stdout = execFileSync(bdPath, ['list'], { cwd: '/workspace' }).toString();
+            await postMessage(roomId, tmid, `**Current Issues:**\n\`\`\`text\n${stdout.trim() || 'No open issues.'}\n\`\`\``);
+        } catch (e) {
+            const errOut = e.stdout ? e.stdout.toString() : e.message;
+            await postMessage(roomId, tmid, `Error retrieving beads:\n\`\`\`text\n${errOut.trim()}\n\`\`\``);
+        }
+        return;
+    }
+
+    if (messageText === 'log' || messageText === 'logs') {
+        const data = getThreads();
+        const convId = data.threads[data.active_thread];
+        if (!convId) {
+            await postMessage(roomId, tmid, 'No active conversation found for this thread.');
+            return;
+        }
+        
+        const logPath = `/root/.gemini/antigravity-cli/brain/${convId}/.system_generated/logs/transcript.jsonl`;
+        if (!fs.existsSync(logPath)) {
+            await postMessage(roomId, tmid, 'Log file not found. Have you sent a prompt in this thread yet?');
+            return;
+        }
+        
+        const thinkingMsgId = await postMessage(roomId, tmid, "`⠋` *Fetching logs...*");
+        const { exec } = require('child_process');
+        exec(`tail -n 25 ${logPath}`, async (error, stdout) => {
+            let output = stdout.substring(0, 7000);
+            if (error) output = `Error: ${error.message}`;
+            if (thinkingMsgId) {
+                await updateMessage(roomId, thinkingMsgId, '```json\n' + output + '\n```');
+            }
+        });
+        return;
+    }
+
+    if (messageText === 'threads' || messageText === 'thread list') {
+        const data = getThreads();
+        let reply = 'Available threads:\n-----------------\n';
+        const threadNames = Object.keys(data.threads);
+        if (threadNames.length === 0) reply += '(no active threads yet)\n';
+        for (const name of threadNames) {
+            reply += `${name === data.active_thread ? '*' : ' '} ${name}\n`;
+        }
+        reply += `\nCurrently active: ${data.active_thread}`;
+        await postMessage(roomId, tmid, '```text\n' + reply + '\n```');
+        return;
+    }
+
+    if (messageText.startsWith('thread switch ') || messageText.startsWith('thread checkout ')) {
+        const name = messageText.split(' ')[2].trim();
+        const data = getThreads();
+        data.active_thread = name;
+        saveThreads(data);
+        await postMessage(roomId, tmid, '```text\nSwitched to thread: ' + name + '\n```');
+        return;
+    }
+
+    // Beads integration: automatically log bugs/features
+    const lowerText = messageText.toLowerCase();
+    if (lowerText.startsWith('bug ') || lowerText.startsWith('feature ') || lowerText.startsWith('fix ') || lowerText.startsWith('add ') || lowerText.startsWith('issue ')) {
+        try {
+            const { execSync } = require('child_process');
+            const bdPath = fs.existsSync('/usr/local/bin/bd') ? '/usr/local/bin/bd' : 'bd';
+            if (!fs.existsSync('/workspace/.beads')) {
+                execSync(`${bdPath} init`, { cwd: '/workspace' });
+            }
+            const activeThread = getThreads().active_thread;
+            const title = messageText.replace(/"/g, '\\"');
+            const stdout = execSync(`${bdPath} create "[Epic: ${activeThread}] ${title}"`, { cwd: '/workspace' }).toString();
+            await postMessage(roomId, tmid, `[✓] Logged to Beads Issue Tracker:\n\`\`\`text\n${stdout.trim()}\n\`\`\``);
+        } catch (e) {
+            console.error("Beads error:", e.message);
+        }
+    }
+
+    // Operating Mode status
+    if (messageText.toLowerCase() === 'mode') {
+        const ping = await pingOllama();
+        const ollamaStatus = ping.ok 
+            ? `Online ✓ (${ping.latency}ms, ${ping.models.length} model(s) available)`
+            : `Offline ✗ (${ping.error})`;
+        let modeDesc = '';
+        if (bridgeMode === 'hybrid') {
+            modeDesc = '**HYBRID** (Auto-offload lighter questions/tasks to local Ollama; complex code/workspace tasks to AGY)';
+        } else if (bridgeMode === 'ollama') {
+            modeDesc = '**OLLAMA** (Direct local LLM inference only)';
+        } else {
+            modeDesc = '**AGY** (All requests routed to Antigravity CLI)';
+        }
+
+        let reply = `**Rocket-Grav Operating Status:**\n` +
+            `*   **Mode:** ${modeDesc}\n` +
+            `*   **AGY Model:** \`${currentModel || 'default (subscription)'}\`\n` +
+            `*   **Local Ollama Endpoint:** \`${ollamaUrl}\`\n` +
+            `*   **Active Ollama Model:** \`${ollamaModel}\`\n` +
+            `*   **Ollama Status:** ${ollamaStatus}\n` +
+            `*   **MCP Integration:** Configured via \`ollama-mcp\` tool in AGY\n\n` +
+            `*Switch mode with: \`!agy mode <hybrid|agy|ollama>\`*`;
+        await postMessage(roomId, tmid, reply);
+        return;
+    }
+
+    // Switch bridge operating mode
+    if (messageText.toLowerCase().startsWith('mode switch ') || messageText.toLowerCase().startsWith('mode use ') || messageText.toLowerCase().startsWith('mode set ') || messageText.toLowerCase().startsWith('mode ')) {
+        const parts = messageText.split(' ');
+        const targetMode = parts[parts.length - 1].toLowerCase().trim();
+        if (['hybrid', 'agy', 'ollama'].includes(targetMode)) {
+            bridgeMode = targetMode;
+            let note = '';
+            if (targetMode === 'hybrid') note = 'Questions & light tasks will be offloaded to local Ollama; coding & file operations will run via AGY.';
+            if (targetMode === 'agy') note = 'All prompts will run through Antigravity CLI.';
+            if (targetMode === 'ollama') note = 'All prompts will be handled directly by local Ollama.';
+            await postMessage(roomId, tmid, `[✓] Switched bridge mode to: **${targetMode.toUpperCase()}**\n*${note}*`);
+        } else {
+            await postMessage(roomId, tmid, `Invalid mode: \`${targetMode}\`. Available modes: \`hybrid\`, \`agy\`, \`ollama\`.`);
+        }
+        return;
+    }
+
+    // Ollama ping / connectivity test
+    if (messageText.toLowerCase() === 'ollama ping' || messageText.toLowerCase() === 'ollama status') {
+        const ping = await pingOllama();
+        if (ping.ok) {
+            await postMessage(roomId, tmid, `[✓] **Ollama Online:** Connected to \`${ollamaUrl}\` in **${ping.latency}ms**.\nActive model: \`${ollamaModel}\`\nInstalled models (${ping.models.length}): ${ping.models.map(m => `\`${m}\``).join(', ')}`);
+        } else {
+            await postMessage(roomId, tmid, `[✗] **Ollama Offline:** Unable to connect to \`${ollamaUrl}\`.\nError: \`${ping.error}\``);
+        }
+        return;
+    }
+
+    // List Ollama models
+    if (messageText.toLowerCase() === 'ollama models' || messageText.toLowerCase() === 'ollama list' || messageText.toLowerCase() === 'ollama') {
+        try {
+            const models = await listOllamaModels();
+            if (!models || models.length === 0) {
+                await postMessage(roomId, tmid, `No models found on Ollama at \`${ollamaUrl}\`.`);
+                return;
+            }
+            let reply = `**Available Local Ollama Models (${models.length}):**\n\n| Model Name | Size | Family | Active |\n|---|---|---|:---:|\n`;
+            for (const m of models) {
+                const isActive = m.name === ollamaModel ? '✓' : '';
+                const size = m.details?.parameter_size || (m.size ? `${(m.size / (1024*1024*1024)).toFixed(1)} GB` : 'N/A');
+                const family = m.details?.family || 'N/A';
+                reply += `| \`${m.name}\` | ${size} | ${family} | ${isActive} |\n`;
+            }
+            reply += `\nActive Ollama Model: **\`${ollamaModel}\`**\nSwitch model with: \`!agy ollama switch <name>\``;
+            await postMessage(roomId, tmid, reply);
+        } catch (e) {
+            await postMessage(roomId, tmid, `Error querying Ollama models: ${e.message}`);
+        }
+        return;
+    }
+
+    // Switch Ollama model
+    if (messageText.toLowerCase().startsWith('ollama switch ') || messageText.toLowerCase().startsWith('ollama model ') || messageText.toLowerCase().startsWith('ollama use ')) {
+        const newModel = messageText.split(' ').slice(2).join(' ').trim();
+        if (newModel) {
+            ollamaModel = newModel;
+            await postMessage(roomId, tmid, `[✓] Switched active Ollama model to: **\`${ollamaModel}\`**`);
+        } else {
+            await postMessage(roomId, tmid, `Please provide a model name, e.g. \`!agy ollama switch qwen3:8b\``);
+        }
+        return;
+    }
+
+    // Forced AGY execution (e.g. "!agy full <prompt>" or "!agy force-agy <prompt>")
+    let forceAgy = false;
+    if (messageText.toLowerCase().startsWith('full ') || messageText.toLowerCase().startsWith('force-agy ') || messageText.toLowerCase().startsWith('agy ')) {
+        messageText = messageText.replace(/^(?:full|force-agy|agy)\s+/i, '').trim();
+        forceAgy = true;
+    }
+
+    // Explicit direct Ollama prompt (e.g. "!agy ollama <prompt>" or "!agy ask <prompt>")
+    if (messageText.toLowerCase().startsWith('ollama ') || messageText.toLowerCase().startsWith('ask ')) {
+        const ollamaPrompt = messageText.replace(/^(?:ollama|ask)\s+/i, '').trim();
+        if (!ollamaPrompt) {
+            await postMessage(roomId, tmid, "Please provide a prompt for Ollama.");
+            return;
+        }
+        await executeOllamaMessage(roomId, tmid, ollamaPrompt);
+        return;
+    }
+
+    // Routing decision
+    let useOllama = false;
+    if (!forceAgy) {
+        if (bridgeMode === 'ollama') {
+            useOllama = true;
+        } else if (bridgeMode === 'hybrid') {
+            const taskType = classifyTask(messageText);
+            console.log(`[Rocket-Grav] Task classification for "${messageText.substring(0, 50)}...": ${taskType.toUpperCase()}`);
+            if (taskType === 'light') {
+                useOllama = true;
+            }
+        }
+    }
+
+    if (useOllama) {
+        console.log(`[Rocket-Grav] Offloading to local Ollama (${ollamaModel})`);
+        await executeOllamaMessage(roomId, tmid, messageText, null, (existingMsgId) => {
+            // Fallback to AGY if Ollama fails
+            runAgySession(roomId, tmid, messageText, existingMsgId);
+        });
+        return;
+    }
+
+    // Route to full Antigravity CLI session
+    runAgySession(roomId, tmid, messageText);
 });
 
 app.listen(port, () => {

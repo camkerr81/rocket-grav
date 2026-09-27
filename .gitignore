@@ -7,8 +7,13 @@
 node_modules/
 # Ignore all .gemini contents by default to prevent leaking auth state
 .gemini/*
+!.gemini/config/
 !.gemini/antigravity-cli/
 .gemini/antigravity-cli/*
 !.gemini/antigravity-cli/skills/
+!.gemini/antigravity-cli/rules/
 workspace/
 .env
+
+# Beads / Dolt files (added by bd init)
+.beads/proxieddb/

@@ -21,6 +21,9 @@ services:
       - GEMINI_API=${GEMINI_API:-}
       - BW_CLIENTID=${BW_CLIENTID:-}
       - BW_CLIENTSECRET=${BW_CLIENTSECRET:-}
+      - OLLAMA_URL=${OLLAMA_URL:-http://192.168.8.194:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3:8b}
+      - HYBRID_MODE=${HYBRID_MODE:-true}
     volumes:
       - ./workspace:/workspace
       - ./.gemini:/root/.gemini

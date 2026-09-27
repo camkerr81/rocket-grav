@@ -22,12 +22,16 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm install
 
-# Copy server code and adapters
+# Copy server code, adapters, and MCP servers
 COPY server.js ./
 COPY adapters/ ./adapters/
+COPY mcp/ ./mcp/
 
-# Install Beads issue tracker CLI globally
-RUN npm install -g @beads/bd
+# Make ollama-mcp executable and globally available
+RUN chmod +x ./mcp/ollama-mcp.js && ln -sf /app/mcp/ollama-mcp.js /usr/local/bin/ollama-mcp
+
+# Install Beads issue tracker CLI and optional community MCP servers globally
+RUN npm install -g @beads/bd ollama-mcp-server
 
 # Create the workspace directory
 RUN mkdir -p /workspace
