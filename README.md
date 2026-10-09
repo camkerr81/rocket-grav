@@ -271,11 +271,17 @@ Rocket-Grav includes a bundled Model Context Protocol (MCP) server located in `m
 | `!agy threads` / `!agy thread list` | Lists all threads and marks the active one. | `!agy threads` |
 | `!agy thread switch <name>` | Switches to an existing thread or creates a new one. | `!agy thread switch auth-refactor` |
 
-### 7. Diagnostics & Endpoints
+### 7. Versioning, Diagnostics & Endpoints
 
-* • `!agy log` / `!agy logs`: Tails the last 25 lines of the active thread's `transcript.jsonl`.
-* • `POST /webhook`: Inbound webhook endpoint for chat platforms or external automation scripts.
-* • `GET /assets`: Static gallery viewer for generated images and assets.
+| Command / Endpoint | Type | Description |
+|---|---|---|
+| `!agy version` | Chat Command | Displays installed Antigravity CLI version, latest upstream release, and auto-update status. |
+| `!agy update` / `!agy upgrade` | Chat Command | Triggers an immediate check and in-place upgrade of the Antigravity CLI. |
+| `!agy log` / `!agy logs` | Chat Command | Tails the last 25 lines of the active thread's `transcript.jsonl`. |
+| `GET /version` | REST API | Returns JSON payload with installed/latest version and auto-update metadata. |
+| `POST /update` | REST API | Triggers on-demand Antigravity CLI update via HTTP. |
+| `POST /webhook` | REST API | Inbound webhook endpoint for chat platforms or external automation scripts. |
+| `GET /assets` | Web UI | Static gallery viewer for generated images and assets. |
 
 ---
 
@@ -299,6 +305,8 @@ Configure your `.env` file according to your selected provider:
 | `CHAT_PROVIDER` | Active adapter (`rocketchat`, `mattermost`, `slack`). | `rocketchat` |
 | `BOT_NAME` | Bot username / alias displayed in messages. | `MangoBot` |
 | `HYBRID_MODE` | Enable smart auto-routing between Ollama and AGY (`true`/`false`). | `true` |
+| `AUTO_UPDATE_ENABLED` | Automatically check and update Antigravity CLI (`true`/`false`). | `true` |
+| `AUTO_UPDATE_INTERVAL_HOURS` | Interval in hours between automated update checks. | `24` |
 | `OLLAMA_URL` | Base URL of your local Ollama instance. | `http://192.168.8.194:11434` |
 | `OLLAMA_MODEL` | Default model for local Ollama queries. | `qwen3:8b` |
 | `GEMINI_API` | (Optional) Gemini API key for external tooling. | — |

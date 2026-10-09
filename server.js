@@ -1,5 +1,5 @@
 const express = require('express');
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -54,6 +54,159 @@ console.log(`[Rocket-Grav] Initialized with chat adapter: ${adapter.name.toUpper
 if (adapter.url) console.log(`[Rocket-Grav] Target chat server URL: ${adapter.url}`);
 console.log(`[Rocket-Grav] Bridge Operating Mode: ${bridgeMode.toUpperCase()}`);
 console.log(`[Rocket-Grav] Local Ollama Target: ${ollamaUrl} (default model: ${ollamaModel})`);
+
+// Antigravity CLI Auto-Update Configuration & Utilities
+const AGY_MANIFEST_URL = 'https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_amd64.json';
+
+const autoUpdateState = {
+    enabled: process.env.AUTO_UPDATE_ENABLED !== 'false' && process.env.AUTO_UPDATE_ENABLED !== '0',
+    intervalHours: parseInt(process.env.AUTO_UPDATE_INTERVAL_HOURS, 10) || 24,
+    lastCheck: null,
+    lastResult: 'never',
+    currentVersion: null,
+    latestVersion: null,
+    timer: null
+};
+
+function compareSemver(v1, v2) {
+    const p1 = (v1 || '').trim().replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
+    const p2 = (v2 || '').trim().replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
+    for (let i = 0; i < Math.max(p1.length, p2.length); i++) {
+        const num1 = p1[i] || 0;
+        const num2 = p2[i] || 0;
+        if (num1 > num2) return 1;
+        if (num1 < num2) return -1;
+    }
+    return 0;
+}
+
+function getInstalledAgyVersion() {
+    try {
+        const stdout = execSync('agy --version', { timeout: 10000 }).toString().trim();
+        const match = stdout.match(/(\d+\.\d+\.\d+)/);
+        return match ? match[1] : stdout;
+    } catch (e) {
+        console.error('[Auto-Update] Error retrieving installed agy version:', e.message);
+        return null;
+    }
+}
+
+async function fetchLatestAgyVersion() {
+    try {
+        const res = await fetch(AGY_MANIFEST_URL, { signal: AbortSignal.timeout(10000) });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        return data.version || null;
+    } catch (e) {
+        console.warn(`[Auto-Update] Could not fetch manifest from ${AGY_MANIFEST_URL}: ${e.message}`);
+        return null;
+    }
+}
+
+async function performAgyUpdate() {
+    const currentVersion = getInstalledAgyVersion();
+    console.log(`[Auto-Update] Initiating Antigravity CLI update (current: ${currentVersion || 'unknown'})...`);
+    let output = '';
+    let success = false;
+
+    // Try native "agy update" first
+    try {
+        output = execSync('agy update', { timeout: 120000 }).toString();
+        success = true;
+    } catch (err) {
+        output = (err.stdout ? err.stdout.toString() : '') + (err.stderr ? err.stderr.toString() : '') + err.message;
+        console.warn(`[Auto-Update] 'agy update' encountered an issue, trying installation script fallback: ${output}`);
+
+        // Fallback: run official curl installer
+        try {
+            const installOutput = execSync('curl -fsSL https://antigravity.google/cli/install.sh | bash', { timeout: 120000 }).toString();
+            output += '\n' + installOutput;
+            success = true;
+        } catch (installErr) {
+            output += '\n' + (installErr.stdout ? installErr.stdout.toString() : '') + installErr.message;
+            success = false;
+        }
+    }
+
+    const newVersion = getInstalledAgyVersion();
+    const updated = Boolean(currentVersion && newVersion && compareSemver(newVersion, currentVersion) > 0);
+
+    return {
+        success,
+        previousVersion: currentVersion,
+        newVersion: newVersion,
+        updated,
+        output: output.trim()
+    };
+}
+
+async function checkAndApplyAgyUpdate(triggeredBy = 'scheduler') {
+    autoUpdateState.lastCheck = new Date().toISOString();
+    const currentVersion = getInstalledAgyVersion();
+    autoUpdateState.currentVersion = currentVersion;
+
+    console.log(`[Auto-Update] [${triggeredBy}] Checking for Antigravity CLI updates... (Current: ${currentVersion || 'unknown'})`);
+    const latestVersion = await fetchLatestAgyVersion();
+    autoUpdateState.latestVersion = latestVersion;
+
+    if (!latestVersion) {
+        autoUpdateState.lastResult = 'manifest-fetch-failed';
+        console.warn(`[Auto-Update] [${triggeredBy}] Unable to retrieve latest version from manifest.`);
+        return { updateAvailable: false, error: 'Could not fetch latest manifest', currentVersion, latestVersion };
+    }
+
+    const hasNewer = currentVersion ? (compareSemver(latestVersion, currentVersion) > 0) : false;
+
+    if (!hasNewer) {
+        autoUpdateState.lastResult = `up-to-date (v${currentVersion})`;
+        console.log(`[Auto-Update] [${triggeredBy}] Antigravity CLI is up to date (v${currentVersion}).`);
+        return { updateAvailable: false, currentVersion, latestVersion };
+    }
+
+    console.log(`[Auto-Update] [${triggeredBy}] Newer version available: v${latestVersion} (installed: v${currentVersion}). Updating...`);
+    const result = await performAgyUpdate();
+    if (result.success && result.updated) {
+        autoUpdateState.lastResult = `updated from v${currentVersion} to v${result.newVersion}`;
+        autoUpdateState.currentVersion = result.newVersion;
+        console.log(`[Auto-Update] [${triggeredBy}] Successfully updated Antigravity CLI to v${result.newVersion}!`);
+    } else if (result.success) {
+        autoUpdateState.lastResult = `checked (v${result.newVersion})`;
+        autoUpdateState.currentVersion = result.newVersion;
+    } else {
+        autoUpdateState.lastResult = `update-failed: ${result.output.substring(0, 100)}`;
+        console.error(`[Auto-Update] [${triggeredBy}] Failed to update Antigravity CLI: ${result.output}`);
+    }
+
+    return { updateAvailable: true, ...result, currentVersion, latestVersion };
+}
+
+function initAutoUpdateScheduler() {
+    if (!autoUpdateState.enabled) {
+        console.log('[Auto-Update] Auto-update is disabled via configuration.');
+        return;
+    }
+
+    const intervalMs = autoUpdateState.intervalHours * 60 * 60 * 1000;
+    console.log(`[Auto-Update] Enabled: Scheduled daily checks every ${autoUpdateState.intervalHours} hours.`);
+
+    // Perform initial check 30 seconds after server startup
+    setTimeout(async () => {
+        try {
+            await checkAndApplyAgyUpdate('startup');
+        } catch (e) {
+            console.error('[Auto-Update] Startup check error:', e);
+        }
+    }, 30000);
+
+    // Schedule periodic recurring checks
+    autoUpdateState.timer = setInterval(async () => {
+        try {
+            await checkAndApplyAgyUpdate('daily-cron');
+        } catch (e) {
+            console.error('[Auto-Update] Periodic check error:', e);
+        }
+    }, intervalMs);
+}
 
 function getThreads() {
     if (fs.existsSync(threadsFile)) {
@@ -558,8 +711,57 @@ app.post('/webhook', async (req, res) => {
 *   \`!agy thread switch <name>\` - Switch to an existing thread or create a new one
 *   \`!agy log\` - Show the last few log entries of the active thread's transcript
 *   \`!agy issues\` (or \`beads\`) - List all open beads issues
+*   \`!agy version\` - Show installed Antigravity CLI version and update status
+*   \`!agy update\` (or \`upgrade\`) - Manually check and update Antigravity CLI to latest version
 *   \`!agy help\` - Show this help message`;
         await postMessage(roomId, tmid, helpText);
+        return;
+    }
+
+    if (messageText.toLowerCase() === 'version' || messageText.toLowerCase() === 'agy version') {
+        const current = getInstalledAgyVersion() || 'Unknown';
+        const latest = await fetchLatestAgyVersion();
+        const hasUpdate = (current && latest) ? (compareSemver(latest, current) > 0) : false;
+        
+        let reply = `**Antigravity CLI Version Info:**\n` +
+            `*   **Installed Version:** \`${current}\`\n` +
+            `*   **Latest Available:** \`${latest || 'Unknown'}\`\n` +
+            `*   **Auto-Update Status:** ${autoUpdateState.enabled ? `Enabled (daily check every ${autoUpdateState.intervalHours}h)` : 'Disabled'}\n` +
+            `*   **Last Auto-Check:** ${autoUpdateState.lastCheck ? new Date(autoUpdateState.lastCheck).toLocaleString() : 'Never'}\n` +
+            `*   **Last Status:** \`${autoUpdateState.lastResult}\`\n` +
+            `*   **Status:** ${hasUpdate ? `⚡ **Update available!** Run \`!agy update\` to upgrade immediately.` : `✓ Antigravity CLI is up to date.`}`;
+        
+        await postMessage(roomId, tmid, reply);
+        return;
+    }
+
+    if (messageText.toLowerCase() === 'update' || messageText.toLowerCase() === 'upgrade' || messageText.toLowerCase() === 'agy update') {
+        const thinkingMsgId = await postMessage(roomId, tmid, "`⠋` *Checking for Antigravity CLI updates...*");
+        try {
+            const checkResult = await checkAndApplyAgyUpdate('manual-chat');
+            let reply = '';
+            if (checkResult.updateAvailable && checkResult.updated) {
+                reply = `[✓] **Antigravity CLI updated successfully!**\n* Previous version: \`${checkResult.previousVersion}\`\n* New version: \`${checkResult.newVersion}\``;
+            } else if (!checkResult.updateAvailable && checkResult.currentVersion) {
+                reply = `[✓] **Antigravity CLI is already up to date:** \`${checkResult.currentVersion}\` (Latest: \`${checkResult.latestVersion || checkResult.currentVersion}\`).`;
+            } else if (checkResult.error) {
+                reply = `[✗] **Update check failed:** ${checkResult.error}`;
+            } else {
+                reply = `[✓] Antigravity CLI check completed: \`${checkResult.newVersion || checkResult.currentVersion}\``;
+            }
+            if (thinkingMsgId) {
+                await updateMessage(roomId, thinkingMsgId, reply);
+            } else {
+                await postMessage(roomId, tmid, reply);
+            }
+        } catch (err) {
+            const errReply = `[✗] **Error updating Antigravity CLI:** ${err.message}`;
+            if (thinkingMsgId) {
+                await updateMessage(roomId, thinkingMsgId, errReply);
+            } else {
+                await postMessage(roomId, tmid, errReply);
+            }
+        }
         return;
     }
 
@@ -824,6 +1026,36 @@ app.post('/webhook', async (req, res) => {
     runAgySession(roomId, tmid, messageText);
 });
 
+app.get('/version', async (req, res) => {
+    const current = getInstalledAgyVersion();
+    const latest = await fetchLatestAgyVersion();
+    const hasUpdate = (current && latest) ? (compareSemver(latest, current) > 0) : false;
+    res.json({
+        service: 'rocket-grav',
+        installed_version: current,
+        latest_version: latest,
+        update_available: hasUpdate,
+        auto_update: {
+            enabled: autoUpdateState.enabled,
+            interval_hours: autoUpdateState.intervalHours,
+            last_check: autoUpdateState.lastCheck,
+            last_result: autoUpdateState.lastResult
+        },
+        bridge_mode: bridgeMode,
+        ollama_model: ollamaModel
+    });
+});
+
+app.post('/update', async (req, res) => {
+    try {
+        const result = await checkAndApplyAgyUpdate('http-request');
+        res.json({ success: true, result });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 app.listen(port, () => {
     console.log(`Rocket.Chat AGY Bridge listening on port ${port}`);
+    initAutoUpdateScheduler();
 });
