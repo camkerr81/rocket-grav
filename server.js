@@ -406,6 +406,78 @@ function classifyTask(prompt) {
     return 'heavy';
 }
 
+// Configurable and default refusal keywords/patterns for local Ollama fallback to AGY
+const OLLAMA_FALLBACK_KEYWORDS = (process.env.OLLAMA_FALLBACK_KEYWORDS || '')
+    .split(',')
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean);
+
+const DEFAULT_REFUSAL_STRINGS = [
+    "i'm sorry, but i can't help with that request",
+    "i'm sorry, but i cannot help with that request",
+    "i am sorry, but i cannot help with that request",
+    "i apologize, but i can't help with that request",
+    "i apologize, but i cannot help with that request",
+    "i cannot fulfill this request",
+    "i'm unable to fulfill this request",
+    "i am unable to fulfill this request",
+    "i cannot assist with this request",
+    "i am unable to assist with this request",
+    "i can't assist with this request",
+    "i cannot help with this request",
+    "i can't help with that request"
+];
+
+const DEFAULT_REFUSAL_PATTERNS = [
+    /I(?:'m| am) sorry,?(?: but)? I (?:can't|cannot|am unable to) help with that request/i,
+    /I apologize,?(?: but)? I (?:can't|cannot|am unable to) help with that request/i,
+    /I (?:cannot|can't|am unable to) (?:fulfill|complete|process|assist with) this request/i,
+    /I (?:cannot|can't|am unable to) help with (?:that|this) (?:request|task|question)/i,
+    /I(?:'m| am) sorry,?(?: but)? I (?:cannot|can't|am unable to) (?:assist|help|fulfill|do that)/i,
+    /I apologize,?(?: but)? I (?:cannot|can't|am unable to) (?:assist|help|fulfill|do that)/i,
+    /As an AI(?: language model)?, I (?:cannot|can't|am unable to|do not have|don't have)/i,
+    /As a language model, I (?:cannot|can't|am unable to|do not have|don't have)/i,
+    /I (?:don't|do not) have access to (?:your |the )?(?:workspace|filesystem|system|tools|real-time|files)/i,
+    /I (?:don't|do not) have (?:the )?(?:ability|tools|capability|permissions) to/i,
+    /I (?:cannot|can't) (?:access|view|edit|modify|run) (?:files|directories|commands|scripts|tools) in (?:your|the) (?:workspace|system|environment)/i,
+    /I (?:do not|don't) have (?:real-time|current|up-to-date) (?:information|access|data)/i
+];
+
+function isOllamaRefusal(text, customKeywords = []) {
+    if (!text || !text.trim()) {
+        return { isRefusal: true, reason: 'Empty response', matched: 'empty response' };
+    }
+
+    const clean = text.trim();
+    const lower = clean.toLowerCase();
+
+    // Check custom strings from environment or options
+    const allCustom = [...OLLAMA_FALLBACK_KEYWORDS, ...customKeywords];
+    for (const kw of allCustom) {
+        if (kw && lower.includes(kw.toLowerCase().trim())) {
+            return { isRefusal: true, reason: 'Custom keyword match', matched: kw };
+        }
+    }
+
+    // Check literal refusal strings
+    for (const phrase of DEFAULT_REFUSAL_STRINGS) {
+        if (lower.includes(phrase)) {
+            return { isRefusal: true, reason: 'Refusal phrase', matched: phrase };
+        }
+    }
+
+    // Check regex patterns against first 600 chars where refusals typically manifest
+    const sample = clean.substring(0, 600);
+    for (const pattern of DEFAULT_REFUSAL_PATTERNS) {
+        const m = sample.match(pattern);
+        if (m) {
+            return { isRefusal: true, reason: 'Refusal pattern match', matched: m[0] };
+        }
+    }
+
+    return { isRefusal: false };
+}
+
 async function executeOllamaMessage(roomId, tmid, promptText, customModel = null, fallbackToAgy = null) {
     const targetModel = customModel || ollamaModel;
     const thinkingMsgId = await postMessage(roomId, tmid, `\`⠋\` *Offloading to local Ollama (${targetModel})...*`);
@@ -413,6 +485,22 @@ async function executeOllamaMessage(roomId, tmid, promptText, customModel = null
 
     try {
         const result = await queryOllama(promptText, { model: targetModel });
+
+        // In Hybrid mode, detect if local model refused, declined, or was unable to answer
+        if (fallbackToAgy) {
+            const refusalCheck = isOllamaRefusal(result.text);
+            if (refusalCheck.isRefusal) {
+                const matchedSnippet = refusalCheck.matched.length > 60
+                    ? refusalCheck.matched.substring(0, 57) + '...'
+                    : refusalCheck.matched;
+                console.log(`[Rocket-Grav] Local Ollama declined/unable to answer (${refusalCheck.reason}: "${refusalCheck.matched}"). Falling back to frontier AGY...`);
+                if (thinkingMsgId) {
+                    await updateMessage(roomId, thinkingMsgId, `\`⠋\` *Local Ollama declined or unable to answer ("${matchedSnippet}"). Falling back to frontier Antigravity (AGY)...*`);
+                }
+                return fallbackToAgy(thinkingMsgId);
+            }
+        }
+
         const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
         let reply = `[⚡ **Local Ollama** (\`${targetModel}\` • ${elapsedSec}s)]\n\n`;
         if (result.thinking) {
