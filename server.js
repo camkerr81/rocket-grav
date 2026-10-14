@@ -46,7 +46,20 @@ const MODEL_ALIASES = {
     'default':      null,
 };
 
-const threadsFile = '/workspace/threads.json';
+const {
+    getThreads,
+    saveThreads,
+    updateThreadConvId,
+    setActiveThread,
+    resetThread,
+    deleteThread,
+    getRecentConversations,
+    getConversationById,
+    resolveSwitchTarget,
+    formatConversationList,
+    formatThreadList,
+    formatThreadStatus
+} = require('./threads');
 
 const { getAdapter } = require('./adapters');
 const adapter = getAdapter();
@@ -208,19 +221,6 @@ function initAutoUpdateScheduler() {
     }, intervalMs);
 }
 
-function getThreads() {
-    if (fs.existsSync(threadsFile)) {
-        try {
-            return JSON.parse(fs.readFileSync(threadsFile, 'utf8'));
-        } catch(e) {}
-    }
-    return { active_thread: 'default', threads: {} };
-}
-
-function saveThreads(data) {
-    fs.writeFileSync(threadsFile, JSON.stringify(data, null, 2));
-}
-
 function formatToolStatus(toolName, params = {}) {
     switch (toolName) {
         case 'run_command': {
@@ -365,7 +365,18 @@ function classifyTask(prompt) {
         /`{1,3}[\s\S]*?`{1,3}/ // Inline or fenced code blocks often mean refactoring/fixing code
     ];
 
-    for (const pattern of heavyPatterns) {
+    // Context patterns: conversation history, previous tasks/actions, threads, workspace context
+    // These must ALWAYS route to AGY so full conversation memory & workspace state are available.
+    const contextHeavyPatterns = [
+        /\b(?:conversation|conversations|thread|threads|session|sessions|history|transcript)\b/i,
+        /\b(?:what\s+did\s+we|what\s+was\s+the|last\s+task|last\s+step|last\s+action|last\s+prompt|what\s+have\s+we\s+done)\b/i,
+        /\b(?:what\s+are\s+we\s+working\s+on|current\s+task|project\s+status|workspace\s+status)\b/i,
+        /\b(?:what\s+files|list\s+files|show\s+files|find\s+files|in\s+this\s+repo|in\s+this\s+workspace)\b/i,
+        /\b(?:remember|recall|secret\s+word|previous|earlier)\b/i,
+        /\b(?:antigravity|agy|who\s+are\s+you|what\s+tools|which\s+tools)\b/i
+    ];
+
+    for (const pattern of contextHeavyPatterns) {
         if (pattern.test(text)) {
             return 'heavy';
         }
@@ -556,7 +567,10 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null) {
                     } else if (parsed.event === 'result') {
                         finalResultObj = parsed.result;
                     } else if (parsed.event === 'init') {
-                        if (parsed.conversation_id) activeProcesses[parsed.conversation_id] = child;
+                        if (parsed.conversation_id) {
+                            activeProcesses[parsed.conversation_id] = child;
+                            updateThreadConvId(activeThreadName, parsed.conversation_id);
+                        }
                         process.stdout.write(`\x1b[32m\n[AGY Initialized - Conversation UUID: ${parsed.conversation_id}]\x1b[0m\n`);
                     }
                 } catch(e) {
@@ -601,9 +615,8 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null) {
             isFinished = true;
             let finalOutput = '';
             if (finalResultObj) {
-                if (finalResultObj.conversation_id && !convId) {
-                    data.threads[activeThreadName] = finalResultObj.conversation_id;
-                    saveThreads(data);
+                if (finalResultObj.conversation_id) {
+                    updateThreadConvId(activeThreadName, finalResultObj.conversation_id);
                 }
                 finalOutput = finalResultObj.response || finalResultObj.error || JSON.stringify(finalResultObj, null, 2);
                 if (finalResultObj.error) {
@@ -707,9 +720,14 @@ app.post('/webhook', async (req, res) => {
 *   \`!agy model\` - Show the current AGY model
 *   \`!agy model list\` (or \`models\`) - List available AGY models
 *   \`!agy model switch <name>\` - Switch AGY model (e.g. \`claude\`, \`flash\`, \`gemini\`, \`default\`)
-*   \`!agy thread list\` (or \`threads\`) - List all available threads and show the active one
-*   \`!agy thread switch <name>\` - Switch to an existing thread or create a new one
-*   \`!agy log\` - Show the last few log entries of the active thread's transcript
+*   \`!agy conversations\` (or \`convs\`) - List recent AGY conversations with numbers & titles
+*   \`!agy switch <name|#num|uuid>\` - Switch active thread or resume an AGY conversation
+*   \`!agy thread\` (or \`conv\`) - Show status of active thread and bound conversation
+*   \`!agy thread list\` (or \`threads\`) - List all named threads
+*   \`!agy thread new <name>\` - Create and switch to a new fresh thread
+*   \`!agy thread reset [name]\` - Reset a thread's conversation memory
+*   \`!agy thread delete <name>\` - Delete a named thread
+*   \`!agy log\` - Show recent transcript logs of the active conversation
 *   \`!agy issues\` (or \`beads\`) - List all open beads issues
 *   \`!agy version\` - Show installed Antigravity CLI version and update status
 *   \`!agy update\` (or \`upgrade\`) - Manually check and update Antigravity CLI to latest version
@@ -833,15 +851,21 @@ app.post('/webhook', async (req, res) => {
             return;
         }
         
-        const logPath = `/root/.gemini/antigravity-cli/brain/${convId}/.system_generated/logs/transcript.jsonl`;
-        if (!fs.existsSync(logPath)) {
+        const candidateLogPaths = [
+            path.join(process.env.HOME || '', `.gemini/antigravity-cli/brain/${convId}/.system_generated/logs/transcript.jsonl`),
+            `/root/.gemini/antigravity-cli/brain/${convId}/.system_generated/logs/transcript.jsonl`,
+            path.join(os.homedir(), `.gemini/antigravity-cli/brain/${convId}/.system_generated/logs/transcript.jsonl`)
+        ].filter(Boolean);
+
+        const logPath = candidateLogPaths.find(p => fs.existsSync(p));
+        if (!logPath) {
             await postMessage(roomId, tmid, 'Log file not found. Have you sent a prompt in this thread yet?');
             return;
         }
         
         const thinkingMsgId = await postMessage(roomId, tmid, "`⠋` *Fetching logs...*");
         const { exec } = require('child_process');
-        exec(`tail -n 25 ${logPath}`, async (error, stdout) => {
+        exec(`tail -n 25 "${logPath}"`, async (error, stdout) => {
             let output = stdout.substring(0, 7000);
             if (error) output = `Error: ${error.message}`;
             if (thinkingMsgId) {
@@ -851,25 +875,114 @@ app.post('/webhook', async (req, res) => {
         return;
     }
 
-    if (messageText === 'threads' || messageText === 'thread list') {
-        const data = getThreads();
-        let reply = 'Available threads:\n-----------------\n';
-        const threadNames = Object.keys(data.threads);
-        if (threadNames.length === 0) reply += '(no active threads yet)\n';
-        for (const name of threadNames) {
-            reply += `${name === data.active_thread ? '*' : ' '} ${name}\n`;
-        }
-        reply += `\nCurrently active: ${data.active_thread}`;
-        await postMessage(roomId, tmid, '```text\n' + reply + '\n```');
+    // 1. List AGY Conversations
+    const lowerMessage = messageText.toLowerCase().trim();
+    if (
+        lowerMessage === 'conversations' ||
+        lowerMessage === 'conversation list' ||
+        lowerMessage === 'convs' ||
+        lowerMessage === 'conv list' ||
+        lowerMessage === 'list conversations' ||
+        lowerMessage === 'previous conversations' ||
+        lowerMessage === 'show conversations' ||
+        lowerMessage === 'show previous conversations'
+    ) {
+        const reply = formatConversationList();
+        await postMessage(roomId, tmid, reply);
         return;
     }
 
-    if (messageText.startsWith('thread switch ') || messageText.startsWith('thread checkout ')) {
-        const name = messageText.split(' ')[2].trim();
-        const data = getThreads();
-        data.active_thread = name;
-        saveThreads(data);
-        await postMessage(roomId, tmid, '```text\nSwitched to thread: ' + name + '\n```');
+    // 2. Active Thread & Conversation Status
+    if (
+        lowerMessage === 'thread' ||
+        lowerMessage === 'thread status' ||
+        lowerMessage === 'thread info' ||
+        lowerMessage === 'conversation' ||
+        lowerMessage === 'conv' ||
+        lowerMessage === 'current thread' ||
+        lowerMessage === 'current conversation'
+    ) {
+        const reply = formatThreadStatus();
+        await postMessage(roomId, tmid, reply);
+        return;
+    }
+
+    // 3. List Managed Threads
+    if (lowerMessage === 'threads' || lowerMessage === 'thread list') {
+        const reply = formatThreadList();
+        await postMessage(roomId, tmid, reply);
+        return;
+    }
+
+    // 4. Create New Thread
+    const threadNewMatch = messageText.match(/^(?:thread\s+new|new\s+thread)\s+([a-zA-Z0-9_\-\.]+)/i);
+    if (threadNewMatch) {
+        const newName = threadNewMatch[1].trim();
+        const res = resolveSwitchTarget(newName);
+        await postMessage(roomId, tmid, res.message || `[✗] ${res.error}`);
+        return;
+    }
+
+    // 5. Reset Thread
+    const threadResetMatch = messageText.match(/^(?:thread\s+reset|reset\s+thread)(?:\s+([a-zA-Z0-9_\-\.]+))?/i);
+    if (threadResetMatch) {
+        const targetName = threadResetMatch[1] ? threadResetMatch[1].trim() : null;
+        const resetName = resetThread(targetName);
+        await postMessage(roomId, tmid, `[✓] **Thread reset:** \`${resetName}\`\n*(Conversation unlinked; a fresh session will start on your next prompt)*`);
+        return;
+    }
+
+    // 6. Delete Thread
+    const threadDeleteMatch = messageText.match(/^(?:thread\s+(?:delete|remove)|(?:delete|remove)\s+thread)\s+([a-zA-Z0-9_\-\.]+)/i);
+    if (threadDeleteMatch) {
+        const targetName = threadDeleteMatch[1].trim();
+        const res = deleteThread(targetName);
+        if (res.success) {
+            await postMessage(roomId, tmid, `[✓] **Deleted thread:** \`${res.deleted}\`. Active thread is now: \`${res.active_thread}\`.`);
+        } else {
+            await postMessage(roomId, tmid, `[✗] ${res.error}`);
+        }
+        return;
+    }
+
+    // 7. Unified Thread & Conversation Switching
+    // Matches:
+    // - switch <target>
+    // - checkout <target>
+    // - use <target>
+    // - thread switch <target>
+    // - thread checkout <target>
+    // - thread use <target>
+    // - conversation switch <target>
+    // - conv switch <target>
+    // - conversation use <target>
+    // - conv use <target>
+    // - conversation <#num|uuid>
+    // - conv <#num|uuid>
+    // - thread <target> (when not a reserved keyword)
+    let switchTarget = null;
+    const generalSwitchMatch = messageText.match(/^(?:thread|conv|conversation)?\s*(?:switch|checkout|use)\s+(.+)$/i);
+    if (generalSwitchMatch) {
+        switchTarget = generalSwitchMatch[1].trim();
+    } else {
+        const convIndexOrUuidMatch = messageText.match(/^(?:conversation|conv)\s+([0-9a-fA-F\-]{6,36}|#?\d+)$/i);
+        if (convIndexOrUuidMatch) {
+            switchTarget = convIndexOrUuidMatch[1].trim();
+        } else {
+            const threadBareMatch = messageText.match(/^thread\s+([a-zA-Z0-9_\-\.]+)$/i);
+            if (threadBareMatch && !['list', 'status', 'info', 'new', 'reset', 'delete', 'remove'].includes(threadBareMatch[1].toLowerCase())) {
+                switchTarget = threadBareMatch[1].trim();
+            }
+        }
+    }
+
+    if (switchTarget) {
+        const res = resolveSwitchTarget(switchTarget);
+        if (res.success) {
+            await postMessage(roomId, tmid, res.message);
+        } else {
+            await postMessage(roomId, tmid, `[✗] ${res.error}`);
+        }
         return;
     }
 
