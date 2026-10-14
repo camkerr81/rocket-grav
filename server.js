@@ -27,7 +27,7 @@ let currentModel = null; // null = use default subscription model
 // Bridge operating mode: 'hybrid' (smart offloading), 'agy' (Antigravity CLI only), or 'ollama' (Ollama only)
 let bridgeMode = (process.env.HYBRID_MODE === 'false' || process.env.HYBRID_MODE === '0') ? 'agy' : 'hybrid';
 let ollamaUrl = (process.env.OLLAMA_URL || 'http://192.168.8.194:11434').replace(/\/+$/, '');
-let ollamaModel = process.env.OLLAMA_MODEL || 'qwen3:8b';
+let ollamaModel = process.env.OLLAMA_MODEL || 'qwen3.5:4b';
 
 // Shorthand aliases for quick model switching
 const MODEL_ALIASES = {
@@ -870,7 +870,7 @@ app.post('/webhook', async (req, res) => {
 *   \`!agy mode <hybrid|agy|ollama>\` - Switch bridge mode (e.g. \`!agy mode hybrid\`, \`!agy mode agy\`)
 *   \`!agy ollama <prompt>\` (or \`!ollama\`, \`!ask\`) - Send prompt directly to local Ollama
 *   \`!agy ollama list\` (or \`models\`) - List available models on local Ollama
-*   \`!agy ollama switch <name>\` - Switch active Ollama model (e.g. \`qwen3:8b\`, \`phi4-mini:latest\`)
+*   \`!agy ollama switch <name>\` - Switch active Ollama model (e.g. \`qwen3.5:4b\`, \`phi4-mini:latest\`)
 *   \`!agy ollama ping\` - Test connectivity and latency to local Ollama instance
 *   \`!agy full <prompt>\` - Force execution through full AGY CLI (bypass Ollama offloading)
 *   \`!agy reply <answer>\` - Reply to an interactive question asked by AGY
@@ -1246,7 +1246,7 @@ app.post('/webhook', async (req, res) => {
             ollamaModel = newModel;
             await postMessage(roomId, tmid, `[✓] Switched active Ollama model to: **\`${ollamaModel}\`**`);
         } else {
-            await postMessage(roomId, tmid, `Please provide a model name, e.g. \`!agy ollama switch qwen3:8b\``);
+            await postMessage(roomId, tmid, `Please provide a model name, e.g. \`!agy ollama switch qwen3.5:4b\``);
         }
         return;
     }
