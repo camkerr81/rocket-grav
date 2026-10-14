@@ -534,7 +534,71 @@ async function executeOllamaMessage(roomId, tmid, promptText, customModel = null
     }
 }
 
-async function runAgySession(roomId, tmid, messageText, existingMsgId = null) {
+// System instructions for Ollama prompt refinement
+const PROMPT_REFINER_SYSTEM = `You are an expert prompt engineer and software architect assisting an autonomous coding agent (Antigravity CLI).
+Your task is to analyze the user's prompt and refine it into a clear, precise, actionable, and technically comprehensive prompt.
+
+Guidelines:
+1. Preserve the user's original intent, requirements, and chosen technologies.
+2. If the prompt is already clear, detailed, and actionable, return it unchanged.
+3. If the prompt is brief, vague, or missing crucial context, expand it with specific technical requirements, edge cases, expected inputs/outputs, and implementation scope.
+4. Output ONLY the refined prompt text. Do NOT include any preamble (e.g. "Here is the refined prompt:"), conversational filler, explanations, or enclosing quotes.`;
+
+async function refinePromptWithOllama(promptText, model = null) {
+    const targetModel = model || ollamaModel;
+    const startTime = Date.now();
+    try {
+        const res = await queryOllama(promptText, {
+            model: targetModel,
+            system: PROMPT_REFINER_SYSTEM,
+            think: false,
+            timeoutMs: 30000
+        });
+
+        let refined = (res.text || '').trim();
+
+        // Strip surrounding quotes if present
+        refined = refined.replace(/^["'`]+|["'`]+$/g, '').trim();
+
+        // Check for refusal or empty output
+        const refusal = isOllamaRefusal(refined);
+        if (refusal.isRefusal || !refined) {
+            console.warn(`[Prompt-Refiner] Ollama returned refusal or empty output (${refusal.matched || 'empty'}). Using original prompt.`);
+            return {
+                success: false,
+                originalPrompt: promptText,
+                refinedPrompt: promptText,
+                isModified: false,
+                latencySec: ((Date.now() - startTime) / 1000).toFixed(1),
+                reason: 'refusal_or_empty'
+            };
+        }
+
+        const isModified = refined.toLowerCase() !== promptText.toLowerCase().trim();
+        const latencySec = ((Date.now() - startTime) / 1000).toFixed(1);
+        console.log(`[Prompt-Refiner] Refined prompt in ${latencySec}s (${isModified ? 'modified' : 'unchanged'}): "${refined.substring(0, 80)}..."`);
+
+        return {
+            success: true,
+            originalPrompt: promptText,
+            refinedPrompt: isModified ? refined : promptText,
+            isModified,
+            latencySec
+        };
+    } catch (err) {
+        console.warn(`[Prompt-Refiner] Failed to refine prompt with Ollama: ${err.message}. Using original prompt.`);
+        return {
+            success: false,
+            originalPrompt: promptText,
+            refinedPrompt: promptText,
+            isModified: false,
+            latencySec: ((Date.now() - startTime) / 1000).toFixed(1),
+            error: err.message
+        };
+    }
+}
+
+async function runAgySession(roomId, tmid, messageText, existingMsgId = null, extraContext = null) {
     // Post the placeholder spinner message if not already existing
     let thinkingMsgId = existingMsgId;
     if (!thinkingMsgId) {
@@ -725,6 +789,10 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null) {
                 finalOutput += `\n\n*(Estimated GCP API cost for ${imageGenerationCount} image(s): $${imageCost.toFixed(4)})*`;
             }
 
+            if (extraContext && extraContext.wasRefined) {
+                finalOutput = `> 💡 **Refined Prompt (${extraContext.latencySec}s):** *${extraContext.refinedPrompt}*\n\n` + finalOutput;
+            }
+
             if (thinkingMsgId) {
                 await updateMessage(roomId, thinkingMsgId, finalOutput);
             } else {
@@ -797,6 +865,7 @@ app.post('/webhook', async (req, res) => {
     if (messageText === 'help') {
         const helpText = `**AGY Bridge Commands**
 *   \`!agy <prompt>\` - Send a prompt (auto-routed in Hybrid mode: light tasks/questions → local Ollama; complex code/tools → AGY)
+*   \`!agy /refine <prompt>\` (or \`<prompt> /refine\`) - Refine & optimize prompt using local Ollama prior to AGY execution
 *   \`!agy mode\` - Show current bridge operating mode and Ollama connection status
 *   \`!agy mode <hybrid|agy|ollama>\` - Switch bridge mode (e.g. \`!agy mode hybrid\`, \`!agy mode agy\`)
 *   \`!agy ollama <prompt>\` (or \`!ollama\`, \`!ask\`) - Send prompt directly to local Ollama
@@ -1182,6 +1251,50 @@ app.post('/webhook', async (req, res) => {
         return;
     }
 
+    // Prompt Refiner Check (/refine at start, end, or inline)
+    let shouldRefine = false;
+    let refinedContext = null;
+    let refineThinkingMsgId = null;
+    const refinePattern = /(?:^|\s)\/refine(?::|\b|\s|$)/i;
+
+    if (refinePattern.test(messageText)) {
+        shouldRefine = true;
+        const originalInput = messageText;
+        messageText = messageText.replace(/(?:^|\s)\/refine(?::|\b|\s|$)/gi, ' ')
+                                 .replace(/\s+/g, ' ')
+                                 .trim();
+        if (!messageText) {
+            await postMessage(roomId, tmid, "Please provide a prompt to refine, e.g. `!agy /refine <your task>` or `!agy <your task> /refine`");
+            return;
+        }
+
+        refineThinkingMsgId = await postMessage(roomId, tmid, `\`⠋\` *Analyzing and refining prompt with local Ollama (${ollamaModel})...*`);
+        const refinerResult = await refinePromptWithOllama(messageText, ollamaModel);
+
+        if (refinerResult.isModified) {
+            const displaySnippet = refinerResult.refinedPrompt.length > 160
+                ? refinerResult.refinedPrompt.substring(0, 157) + '...'
+                : refinerResult.refinedPrompt;
+            if (refineThinkingMsgId) {
+                await updateMessage(roomId, refineThinkingMsgId, `\`⠋\` *Prompt refined via local Ollama (${refinerResult.latencySec}s):*\n> *"${displaySnippet}"*\n\n*Passing to Antigravity (AGY)...*`);
+            }
+            refinedContext = {
+                wasRefined: true,
+                originalPrompt: messageText,
+                refinedPrompt: refinerResult.refinedPrompt,
+                latencySec: refinerResult.latencySec
+            };
+            messageText = refinerResult.refinedPrompt;
+        } else {
+            const note = refinerResult.error
+                ? `(Ollama unavailable: ${refinerResult.error})`
+                : `(prompt already clear & specific)`;
+            if (refineThinkingMsgId) {
+                await updateMessage(roomId, refineThinkingMsgId, `\`⠋\` *Prompt refinement skipped ${note}. Passing to Antigravity (AGY)...*`);
+            }
+        }
+    }
+
     // Forced AGY execution (e.g. "!agy full <prompt>" or "!agy force-agy <prompt>")
     let forceAgy = false;
     if (messageText.toLowerCase().startsWith('full ') || messageText.toLowerCase().startsWith('force-agy ') || messageText.toLowerCase().startsWith('agy ')) {
@@ -1202,7 +1315,7 @@ app.post('/webhook', async (req, res) => {
 
     // Routing decision
     let useOllama = false;
-    if (!forceAgy) {
+    if (!forceAgy && !shouldRefine) {
         if (bridgeMode === 'ollama') {
             useOllama = true;
         } else if (bridgeMode === 'hybrid') {
@@ -1224,7 +1337,7 @@ app.post('/webhook', async (req, res) => {
     }
 
     // Route to full Antigravity CLI session
-    runAgySession(roomId, tmid, messageText);
+    runAgySession(roomId, tmid, messageText, refineThinkingMsgId, refinedContext);
 });
 
 app.get('/version', async (req, res) => {
