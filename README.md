@@ -308,7 +308,7 @@ Configure your `.env` file according to your selected provider:
 | `AUTO_UPDATE_ENABLED` | Automatically check and update Antigravity CLI (`true`/`false`). | `true` |
 | `AUTO_UPDATE_INTERVAL_HOURS` | Interval in hours between automated update checks. | `24` |
 | `OLLAMA_URL` | Base URL of your local Ollama instance. | `http://192.168.8.194:11434` |
-| `OLLAMA_MODEL` | Default model for local Ollama queries. | `qwen3:8b` |
+| `OLLAMA_MODEL` | Default model for local Ollama queries. | `phi4-mini:latest` |
 | `GEMINI_API` | (Optional) Gemini API key for external tooling. | — |
 | `GITEA_PAT` | (Optional) Personal access token for Gitea automation. | — |
 | `ALLOWED_IPS` | (Optional) Comma-separated list of additional allowed client IPs/subnets. | — |

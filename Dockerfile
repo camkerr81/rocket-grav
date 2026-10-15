@@ -9,6 +9,10 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+# Cache-bust Antigravity CLI installation whenever upstream releases a new version
+ARG AGY_CACHEBUST=1
+ADD https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_amd64.json /tmp/agy-manifest.json
+
 # Install the Antigravity CLI
 RUN curl -fsSL https://antigravity.google/cli/install.sh | bash
 

@@ -27,7 +27,7 @@ let currentModel = null; // null = use default subscription model
 // Bridge operating mode: 'hybrid' (smart offloading), 'agy' (Antigravity CLI only), or 'ollama' (Ollama only)
 let bridgeMode = (process.env.HYBRID_MODE === 'false' || process.env.HYBRID_MODE === '0') ? 'agy' : 'hybrid';
 let ollamaUrl = (process.env.OLLAMA_URL || 'http://192.168.8.194:11434').replace(/\/+$/, '');
-let ollamaModel = process.env.OLLAMA_MODEL || 'qwen3.5:4b';
+let ollamaModel = process.env.OLLAMA_MODEL || 'phi4-mini:latest';
 
 // Shorthand aliases for quick model switching
 const MODEL_ALIASES = {
@@ -1246,7 +1246,7 @@ app.post('/webhook', async (req, res) => {
             ollamaModel = newModel;
             await postMessage(roomId, tmid, `[✓] Switched active Ollama model to: **\`${ollamaModel}\`**`);
         } else {
-            await postMessage(roomId, tmid, `Please provide a model name, e.g. \`!agy ollama switch qwen3.5:4b\``);
+            await postMessage(roomId, tmid, `Please provide a model name, e.g. \`!agy ollama switch phi4-mini:latest\``);
         }
         return;
     }
