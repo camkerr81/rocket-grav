@@ -233,6 +233,15 @@ function formatRelativeTime(dateStr) {
     }
 }
 
+function getConversationTitle(conv) {
+    if (!conv) return 'Untitled';
+    const title = (conv.title && typeof conv.title === 'string' && conv.title.trim()) || '';
+    if (title && title.toLowerCase() !== 'untitled') return title;
+    const preview = (conv.preview && typeof conv.preview === 'string' && conv.preview.trim()) || '';
+    if (preview) return preview;
+    return title || 'Untitled';
+}
+
 function slugify(text) {
     return (text || '')
         .toLowerCase()
@@ -287,9 +296,11 @@ function resolveSwitchTarget(targetStr, customPath = null) {
             name => threadsData.threads[name] === targetConvId
         );
 
+        const convTitle = getConversationTitle(conv);
+
         if (!boundThreadName) {
             // Generate a readable thread name from title or UUID prefix
-            const baseSlug = conv.title ? slugify(conv.title) : '';
+            const baseSlug = convTitle ? slugify(convTitle) : '';
             boundThreadName = (baseSlug && !threadsData.threads.hasOwnProperty(baseSlug))
                 ? baseSlug
                 : `conv-${targetConvId.substring(0, 8)}`;
@@ -301,11 +312,11 @@ function resolveSwitchTarget(targetStr, customPath = null) {
             success: true,
             threadName: boundThreadName,
             convId: targetConvId,
-            title: conv.title || 'Untitled',
+            title: convTitle,
             stepCount: conv.step_count || 0,
             lastModified: conv.last_modified_time,
             type: 'index',
-            message: `[✓] **Switched to conversation #${idx}:** "${conv.title || 'Untitled'}"\n*   **Thread:** \`${boundThreadName}\`\n*   **UUID:** \`${targetConvId}\`\n*   **Turns/Steps:** ${conv.step_count || 0} (${formatRelativeTime(conv.last_modified_time)})\n\n*All subsequent prompts will continue this conversation.*`
+            message: `[✓] **Switched to conversation #${idx}:** "${convTitle}"\n*   **Thread:** \`${boundThreadName}\`\n*   **UUID:** \`${targetConvId}\`\n*   **Turns/Steps:** ${conv.step_count || 0} (${formatRelativeTime(conv.last_modified_time)})\n\n*All subsequent prompts will continue this conversation.*`
         };
     }
 
@@ -313,13 +324,14 @@ function resolveSwitchTarget(targetStr, customPath = null) {
     if (UUID_REGEX.test(trimmed) || (UUID_PREFIX_REGEX.test(trimmed) && trimmed.length >= 8)) {
         const convSummary = getConversationById(trimmed);
         const targetConvId = convSummary ? convSummary.conversation_id : trimmed.toLowerCase();
+        const convTitle = convSummary ? getConversationTitle(convSummary) : null;
 
         let boundThreadName = Object.keys(threadsData.threads).find(
             name => (threadsData.threads[name] || '').toLowerCase() === targetConvId
         );
 
         if (!boundThreadName) {
-            const baseSlug = (convSummary && convSummary.title) ? slugify(convSummary.title) : '';
+            const baseSlug = convTitle ? slugify(convTitle) : '';
             boundThreadName = (baseSlug && !threadsData.threads.hasOwnProperty(baseSlug))
                 ? baseSlug
                 : `conv-${targetConvId.substring(0, 8)}`;
@@ -327,14 +339,14 @@ function resolveSwitchTarget(targetStr, customPath = null) {
 
         setActiveThread(boundThreadName, targetConvId, customPath);
 
-        const titleText = (convSummary && convSummary.title) ? ` "${convSummary.title}"` : '';
+        const titleText = convTitle ? ` "${convTitle}"` : '';
         const stepsText = (convSummary && convSummary.step_count) ? ` (${convSummary.step_count} steps)` : '';
 
         return {
             success: true,
             threadName: boundThreadName,
             convId: targetConvId,
-            title: convSummary ? convSummary.title : null,
+            title: convTitle,
             stepCount: convSummary ? convSummary.step_count : 0,
             type: 'uuid',
             message: `[✓] **Switched to conversation:** \`${targetConvId}\`${titleText}${stepsText}\n*   **Active Thread:** \`${boundThreadName}\`\n\n*All subsequent prompts will continue this conversation.*`
@@ -355,7 +367,8 @@ function resolveSwitchTarget(targetStr, customPath = null) {
         if (convId) {
             const conv = getConversationById(convId);
             if (conv) {
-                convDetails = `\n*   **Bound Conversation:** \`${convId}\` ("${conv.title || 'Untitled'}")\n*   **History:** ${conv.step_count || 0} steps (${formatRelativeTime(conv.last_modified_time)})`;
+                const title = getConversationTitle(conv);
+                convDetails = `\n*   **Bound Conversation:** \`${convId}\` ("${title}")\n*   **History:** ${conv.step_count || 0} steps (${formatRelativeTime(conv.last_modified_time)})`;
             } else {
                 convDetails = `\n*   **Bound Conversation:** \`${convId}\``;
             }
@@ -405,24 +418,17 @@ function formatConversationList(limit = 15, customPath = null) {
     }
 
     if (conversations.length === 0) {
-        let text = `**Available Threads (from threads.json):**\n\n`;
-        text += `| Thread | Conversation ID | Status |\n|---|---|---|\n`;
-        for (const [name, id] of Object.entries(threadsData.threads)) {
-            const isActive = (name === activeThread) ? ' **(active)**' : '';
-            text += `| \`${name}\`${isActive} | \`${id || '(none)'}\` | ${id ? 'Bound' : 'Fresh'} |\n`;
-        }
-        text += `\n*Switch thread with: \`!agy switch <name>\`*`;
-        return text;
+        return formatThreadList(customPath);
     }
 
-    let reply = `**Recent Antigravity Conversations:**\n\n`;
-    reply += `| # | Title | Steps | Last Active | Thread | Conversation ID |\n`;
+    let reply = `**Recent Antigravity Conversations (${conversations.length}):**\n\n`;
+    reply += `| # | Title / Topic | Steps | Last Active | Thread | Conversation ID |\n`;
     reply += `|---|---|---|---|---|---|\n`;
 
     conversations.forEach((conv, index) => {
         const num = index + 1;
-        const rawTitle = (conv.title || 'Untitled').trim().replace(/\|/g, '-');
-        const title = rawTitle.length > 36 ? rawTitle.substring(0, 34) + '...' : rawTitle;
+        const rawTitle = getConversationTitle(conv).replace(/\|/g, '-');
+        const title = rawTitle.length > 36 ? rawTitle.substring(0, 34) + '..' : rawTitle;
         const steps = conv.step_count || 0;
         const relativeTime = formatRelativeTime(conv.last_modified_time);
         const boundThread = convToThread[conv.conversation_id.toLowerCase()];
@@ -453,38 +459,69 @@ function formatThreadList(customPath = null) {
     const active = data.active_thread || 'default';
     const names = Object.keys(data.threads);
 
-    let reply = `**Managed Threads (${names.length}):**\n\n`;
-    reply += `| Status | Thread Name | Bound Conversation | Details |\n`;
-    reply += `|---|---|---|---|\n`;
-
     if (names.length === 0) {
-        reply += `| ★ | \`default\` | *(none)* | Fresh session |\n`;
-    } else {
-        for (const name of names) {
-            const isActive = (name === active);
-            const statusMark = isActive ? `★ **ACTIVE**` : ``;
-            const convId = data.threads[name];
-            let details = 'Fresh';
-            let convStr = '*(none)*';
-
-            if (convId) {
-                convStr = `\`${convId.substring(0, 8)}...\``;
-                const conv = getConversationById(convId);
-                if (conv) {
-                    const rawTitle = (conv.title || '').replace(/\|/g, '-');
-                    const title = rawTitle.length > 25 ? rawTitle.substring(0, 23) + '..' : rawTitle;
-                    details = `"${title}" (${conv.step_count || 0} steps)`;
-                } else {
-                    details = `Bound`;
-                }
-            }
-
-            reply += `| ${statusMark} | \`${name}\` | ${convStr} | ${details} |\n`;
-        }
+        return `**Managed Threads (0):**\n\nNo saved threads yet. A fresh session will start on your next prompt.\n*Create a thread with: \`!agy thread new <name>\`*`;
     }
 
-    reply += `\n*Currently active thread: \`${active}\`*`;
-    reply += `\n*Commands: \`!agy switch <name>\`, \`!agy thread new <name>\`, \`!agy thread reset [name]\`, \`!agy thread delete <name>\`*`;
+    // Build thread entries with conversation details
+    const threadEntries = names.map(name => {
+        const convId = data.threads[name];
+        const isActive = (name === active);
+        let conv = null;
+        let title = 'Fresh (no conversation)';
+        let steps = 0;
+        let lastModified = null;
+
+        if (convId) {
+            conv = getConversationById(convId);
+            if (conv) {
+                title = getConversationTitle(conv);
+                steps = conv.step_count || 0;
+                lastModified = conv.last_modified_time;
+            } else {
+                title = 'Bound session';
+            }
+        }
+
+        return {
+            name,
+            convId,
+            isActive,
+            title,
+            steps,
+            lastModified,
+            timeSort: lastModified ? new Date(lastModified).getTime() : 0
+        };
+    });
+
+    // Sort: active thread first, then by last modified descending
+    threadEntries.sort((a, b) => {
+        if (a.isActive) return -1;
+        if (b.isActive) return 1;
+        return b.timeSort - a.timeSort;
+    });
+
+    let reply = `**Managed Threads (${threadEntries.length}):**\n\n`;
+    reply += `| # | Status | Thread Name | Details | Last Active | Conversation ID |\n`;
+    reply += `|---|---|---|---|---|---|\n`;
+
+    threadEntries.forEach((entry, idx) => {
+        const num = idx + 1;
+        const statusMark = entry.isActive ? `★ **ACTIVE**` : ``;
+        const shortConv = entry.convId ? `\`${entry.convId.substring(0, 8)}...\`` : `*(none)*`;
+        const cleanTitle = entry.title.replace(/\|/g, '-');
+        const truncatedTitle = cleanTitle.length > 30 ? cleanTitle.substring(0, 28) + '..' : cleanTitle;
+        const details = entry.convId ? `"${truncatedTitle}" (${entry.steps} steps)` : `*Fresh*`;
+        const timeAgo = entry.lastModified ? formatRelativeTime(entry.lastModified) : '-';
+
+        reply += `| ${num} | ${statusMark} | \`${entry.name}\` | ${details} | ${timeAgo} | ${shortConv} |\n`;
+    });
+
+    reply += `\n★ = Active thread (\`${active}\`)`;
+    reply += `\n\n*Switch thread: \`!agy switch <name>\` (e.g. \`!agy switch ${threadEntries[1] ? threadEntries[1].name : 'default'}\`)*`;
+    reply += `\n*Switch by index: \`!agy switch <#num>\` | List all: \`!agy conversations\`*`;
+    reply += `\n*Manage: \`!agy thread new <name>\` | \`!agy thread reset [name]\` | \`!agy thread delete <name>\`*`;
+
     return reply;
 }
 
@@ -497,13 +534,14 @@ function formatThreadStatus(customPath = null) {
     const convId = data.threads[active] || null;
 
     let reply = `**Current Thread & Conversation Status:**\n` +
-        `*   **Active Thread:** \`${active}\`\n`;
+        `*   **Active Thread:** \`${active}\` ★\n`;
 
     if (convId) {
         reply += `*   **Bound Conversation ID:** \`${convId}\`\n`;
         const conv = getConversationById(convId);
         if (conv) {
-            reply += `*   **Title:** "${conv.title || 'Untitled'}"\n` +
+            const title = getConversationTitle(conv);
+            reply += `*   **Title/Topic:** "${title}"\n` +
                 `*   **Steps/Turns:** ${conv.step_count || 0}\n` +
                 `*   **Last Active:** ${formatRelativeTime(conv.last_modified_time)} (${conv.last_modified_time})\n`;
         } else {
@@ -513,7 +551,14 @@ function formatThreadStatus(customPath = null) {
         reply += `*   **Bound Conversation ID:** *(None - will create new on next prompt)*\n`;
     }
 
-    reply += `\n*Switch with \`!agy switch <name|#num|uuid>\` or list with \`!agy conversations\`.*`;
+    const otherThreads = Object.keys(data.threads).filter(t => t !== active);
+    if (otherThreads.length > 0) {
+        const previewList = otherThreads.slice(0, 6).map(t => `\`${t}\``).join(', ');
+        const extraCount = otherThreads.length > 6 ? ` (+${otherThreads.length - 6} more)` : '';
+        reply += `\n**Other Available Threads (${otherThreads.length}):** ${previewList}${extraCount}\n`;
+    }
+
+    reply += `\n*Switch thread: \`!agy switch <name|#num>\` | View all: \`!agy thread list\` or \`!agy conversations\`*`;
     return reply;
 }
 
@@ -533,5 +578,6 @@ module.exports = {
     formatThreadList,
     formatThreadStatus,
     formatRelativeTime,
+    getConversationTitle,
     slugify
 };

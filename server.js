@@ -1067,7 +1067,16 @@ app.post('/webhook', async (req, res) => {
     }
 
     // 3. List Managed Threads
-    if (lowerMessage === 'threads' || lowerMessage === 'thread list') {
+    if (
+        lowerMessage === 'threads' ||
+        lowerMessage === 'thread list' ||
+        lowerMessage === 'threads list' ||
+        lowerMessage === 'list threads' ||
+        lowerMessage === 'show threads' ||
+        lowerMessage === 'list' ||
+        lowerMessage === 'ls' ||
+        lowerMessage === 'list all'
+    ) {
         const reply = formatThreadList();
         await postMessage(roomId, tmid, reply);
         return;
