@@ -1391,7 +1391,9 @@ app.get('/threads', (req, res) => {
         recent_conversations_count: convs.length,
         recent_conversations: convs,
         gemini_dir: geminiDir,
-        gemini_files: geminiFiles
+        gemini_files: geminiFiles,
+        thread_list_rendered: formatThreadList(),
+        conversation_list_rendered: formatConversationList()
     });
 });
 
