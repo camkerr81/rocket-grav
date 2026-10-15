@@ -47,6 +47,8 @@ const MODEL_ALIASES = {
 };
 
 const {
+    getThreadsFilePath,
+    getConversationDbPath,
     getThreads,
     saveThreads,
     updateThreadConvId,
@@ -1358,6 +1360,36 @@ app.get('/version', async (req, res) => {
         bridge_mode: bridgeMode,
         ollama_model: ollamaModel
     });
+});
+
+app.get('/threads', (req, res) => {
+    const data = getThreads();
+    const dbPath = getConversationDbPath();
+    const convs = getRecentConversations(15);
+    const geminiDir = '/root/.gemini/antigravity-cli';
+    let geminiFiles = [];
+    try {
+        if (fs.existsSync(geminiDir)) {
+            geminiFiles = fs.readdirSync(geminiDir);
+        }
+    } catch (_) {}
+
+    res.json({
+        threads_file: getThreadsFilePath(),
+        threads_data: data,
+        db_path: dbPath,
+        db_exists: dbPath ? fs.existsSync(dbPath) : false,
+        recent_conversations_count: convs.length,
+        recent_conversations: convs,
+        gemini_dir: geminiDir,
+        gemini_files: geminiFiles
+    });
+});
+
+app.get('/conversations', (req, res) => {
+    const limit = parseInt(req.query.limit, 10) || 30;
+    const convs = getRecentConversations(limit);
+    res.json({ count: convs.length, conversations: convs });
 });
 
 app.post('/update', async (req, res) => {
