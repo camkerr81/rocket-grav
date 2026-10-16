@@ -42,7 +42,7 @@ class SlackAdapter extends BaseAdapter {
         };
     }
 
-    async postMessage(roomId, tmid, text) {
+    async postMessage(roomId, tmid, text, attachments = null) {
         if (!this.botToken) {
             console.warn('[SlackAdapter] Missing SLACK_BOT_TOKEN.');
             return null;
@@ -53,6 +53,9 @@ class SlackAdapter extends BaseAdapter {
             text: text
         };
         if (tmid) payload.thread_ts = tmid;
+        if (Array.isArray(attachments) && attachments.length > 0) {
+            payload.attachments = attachments;
+        }
 
         try {
             const response = await fetch('https://slack.com/api/chat.postMessage', {
@@ -71,8 +74,17 @@ class SlackAdapter extends BaseAdapter {
         }
     }
 
-    async updateMessage(roomId, msgId, text) {
+    async updateMessage(roomId, msgId, text, attachments = null) {
         if (!this.botToken || !msgId) return;
+
+        const payload = {
+            channel: roomId,
+            ts: msgId,
+            text: text
+        };
+        if (Array.isArray(attachments) && attachments.length > 0) {
+            payload.attachments = attachments;
+        }
 
         try {
             await fetch('https://slack.com/api/chat.update', {
@@ -81,11 +93,7 @@ class SlackAdapter extends BaseAdapter {
                     'Authorization': `Bearer ${this.botToken}`,
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({
-                    channel: roomId,
-                    ts: msgId,
-                    text: text
-                })
+                body: JSON.stringify(payload)
             });
         } catch (e) {
             console.error('[SlackAdapter] Error updating message:', e.message);

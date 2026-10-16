@@ -26,7 +26,7 @@ class MattermostAdapter extends BaseAdapter {
         };
     }
 
-    async postMessage(roomId, tmid, text) {
+    async postMessage(roomId, tmid, text, attachments = null) {
         if (!this.pat) {
             console.warn('[MattermostAdapter] Missing API credentials (MATTERMOST_PAT or MATTERMOST_BOT_TOKEN).');
             return null;
@@ -37,6 +37,9 @@ class MattermostAdapter extends BaseAdapter {
             message: text
         };
         if (tmid) payload.root_id = tmid;
+        if (Array.isArray(attachments) && attachments.length > 0) {
+            payload.props = { attachments };
+        }
 
         try {
             const response = await fetch(`${this.url}/api/v4/posts`, {
@@ -55,8 +58,16 @@ class MattermostAdapter extends BaseAdapter {
         }
     }
 
-    async updateMessage(roomId, msgId, text) {
+    async updateMessage(roomId, msgId, text, attachments = null) {
         if (!this.pat || !msgId) return;
+
+        const payload = {
+            id: msgId,
+            message: text
+        };
+        if (Array.isArray(attachments) && attachments.length > 0) {
+            payload.props = { attachments };
+        }
 
         try {
             await fetch(`${this.url}/api/v4/posts/${msgId}`, {
@@ -65,10 +76,7 @@ class MattermostAdapter extends BaseAdapter {
                     'Authorization': `Bearer ${this.pat}`,
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({
-                    id: msgId,
-                    message: text
-                })
+                body: JSON.stringify(payload)
             });
         } catch (e) {
             console.error('[MattermostAdapter] Error updating post:', e.message);

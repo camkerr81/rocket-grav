@@ -28,7 +28,7 @@ class RocketChatAdapter extends BaseAdapter {
         };
     }
 
-    async postMessage(roomId, tmid, text) {
+    async postMessage(roomId, tmid, text, attachments = null) {
         if (!this.userId || !this.pat) {
             console.warn('[RocketChatAdapter] Missing API credentials (ROCKETCHAT_USER_ID or ROCKETCHAT_PAT).');
             return null;
@@ -36,6 +36,9 @@ class RocketChatAdapter extends BaseAdapter {
 
         const payload = { roomId, text, alias: this.botAlias };
         if (tmid) payload.tmid = tmid;
+        if (Array.isArray(attachments) && attachments.length > 0) {
+            payload.attachments = attachments;
+        }
 
         try {
             const response = await fetch(`${this.url}/api/v1/chat.postMessage`, {
@@ -58,8 +61,13 @@ class RocketChatAdapter extends BaseAdapter {
         }
     }
 
-    async updateMessage(roomId, msgId, text) {
+    async updateMessage(roomId, msgId, text, attachments = null) {
         if (!this.userId || !this.pat || !msgId) return;
+
+        const payload = { roomId, msgId, text };
+        if (Array.isArray(attachments) && attachments.length > 0) {
+            payload.attachments = attachments;
+        }
 
         try {
             const response = await fetch(`${this.url}/api/v1/chat.update`, {
@@ -69,7 +77,7 @@ class RocketChatAdapter extends BaseAdapter {
                     'X-User-Id': this.userId,
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({ roomId, msgId, text })
+                body: JSON.stringify(payload)
             });
             const data = await response.json();
             if (!data.success) {

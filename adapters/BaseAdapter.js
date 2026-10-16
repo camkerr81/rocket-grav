@@ -29,9 +29,10 @@ class BaseAdapter {
      * @param {string} roomId - Channel or conversation ID
      * @param {string|null} tmid - Thread ID (if replying in a thread)
      * @param {string} text - Message text
+     * @param {Array<object>|null} [attachments=null] - Optional attachments (e.g. collapsible cards)
      * @returns {Promise<string|null>} Created message ID
      */
-    async postMessage(roomId, tmid, text) {
+    async postMessage(roomId, tmid, text, attachments = null) {
         throw new Error(`postMessage() not implemented for ${this.name} adapter.`);
     }
 
@@ -40,9 +41,10 @@ class BaseAdapter {
      * @param {string} roomId - Channel or conversation ID
      * @param {string} msgId - Message ID to update
      * @param {string} text - New message text
+     * @param {Array<object>|null} [attachments=null] - Optional attachments (e.g. collapsible cards)
      * @returns {Promise<void>}
      */
-    async updateMessage(roomId, msgId, text) {
+    async updateMessage(roomId, msgId, text, attachments = null) {
         throw new Error(`updateMessage() not implemented for ${this.name} adapter.`);
     }
 }

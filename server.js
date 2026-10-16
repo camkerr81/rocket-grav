@@ -290,9 +290,192 @@ function formatToolSummary(toolName, params = {}) {
     }
 }
 
-// Wrapper calls that delegate to the active chat provider adapter
-const postMessage = (roomId, tmid, text) => adapter.postMessage(roomId, tmid, text);
-const updateMessage = (roomId, msgId, text) => adapter.updateMessage(roomId, msgId, text);
+/**
+ * Strips ANSI escape sequences and terminal control codes from a string.
+ */
+function stripAnsi(str) {
+    if (!str || typeof str !== 'string') return str || '';
+    return str.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])|\x1B\([B0-9]|\x1B\[[0-9;]*[a-zA-Z]/g, '');
+}
+
+/**
+ * Normalizes and prettifies markdown text for Rocket.Chat and chat clients.
+ * - Strips ANSI codes
+ * - Ensures markdown headers have space after # marks (e.g. "###Heading" -> "### Heading")
+ * - Condenses 3+ consecutive newlines to double newlines
+ * - Auto-closes unclosed code fences if output was cut off
+ * - Truncates cleanly if exceeding maxLen
+ */
+function formatPrettyMarkdown(text, maxLen = 7000) {
+    if (!text || typeof text !== 'string') return text || '';
+    let clean = stripAnsi(text);
+
+    // Normalize header markdown: ensure space after hash (e.g. "###Title" -> "### Title")
+    clean = clean.replace(/^(#{1,6})([^#\s])/gm, '$1 $2');
+
+    // Condense 3+ consecutive newlines down to 2
+    clean = clean.replace(/\n{3,}/g, '\n\n');
+
+    clean = clean.trim();
+
+    if (clean.length > maxLen) {
+        clean = clean.substring(0, maxLen) + '\n...[output truncated]';
+    }
+
+    // Fix unclosed code fences if any
+    const codeFenceMatches = clean.match(/```/g);
+    if (codeFenceMatches && codeFenceMatches.length % 2 !== 0) {
+        clean += '\n```';
+    }
+
+    return clean;
+}
+
+/**
+ * Creates a collapsible attachment for Rocket.Chat, Slack, or Mattermost.
+ * In Rocket.Chat, `collapsed: true` natively renders a clickable expandable card.
+ * @param {string} title - Header or title of the collapsible section
+ * @param {string} content - Inner text or code
+ * @param {string} [lang] - Language fence (e.g. 'json', 'text', 'bash')
+ * @param {string} [color] - Left border hex color (e.g. '#ef4444', '#8b5cf6', '#64748b')
+ */
+function makeCollapsibleAttachment(title, content, lang = null, color = '#6366f1') {
+    let clean = stripAnsi(content || '').trim();
+    if (clean.length > 7000) {
+        clean = clean.substring(0, 7000) + '\n...[truncated]';
+    }
+    let text = clean;
+    if (lang) {
+        text = `\`\`\`${lang}\n${clean}\n\`\`\``;
+    }
+    return {
+        title: title || 'Details (click to expand)',
+        text: text,
+        collapsed: true,
+        color: color
+    };
+}
+
+/**
+ * Formats terminal stdout from `bd list` into a clean Markdown table.
+ */
+function formatBeadsList(stdout) {
+    if (!stdout || !stdout.trim()) return 'ℹ️ No issues found in Beads.';
+    const lines = stdout.split('\n');
+    const issues = [];
+    let summaryText = '';
+
+    const statusMap = {
+        '○': '⚪ Open',
+        '◐': '🟡 In Progress',
+        '●': '🔴 Blocked',
+        '✓': '🟢 Closed',
+        '❄': '❄️ Deferred'
+    };
+
+    for (const line of lines) {
+        const trimmed = stripAnsi(line).trim();
+        if (!trimmed || trimmed.startsWith('---') || trimmed.startsWith('Status:')) continue;
+        if (trimmed.startsWith('Total:')) {
+            summaryText = trimmed;
+            continue;
+        }
+
+        const m = trimmed.match(/^([○◐●✓❄])\s+([a-zA-Z0-9_\-]+)\s+(?:[●○]\s+)?(P[0-9]+)\s+(.+)$/);
+        if (m) {
+            const [, sym, id, priority, title] = m;
+            const status = statusMap[sym] || sym;
+            issues.push({ status, id, priority, title });
+        }
+    }
+
+    if (issues.length === 0) {
+        return `**📋 Beads Issues:**\n\`\`\`text\n${stripAnsi(stdout).trim()}\n\`\`\``;
+    }
+
+    let out = '**📋 Current Beads Issues:**\n\n';
+    out += '| Status | Priority | Issue ID | Description |\n';
+    out += '|---|:---:|---|---|\n';
+    for (const iss of issues) {
+        out += `| ${iss.status} | \`${iss.priority}\` | \`${iss.id}\` | ${iss.title} |\n`;
+    }
+    if (summaryText) {
+        out += `\n*${summaryText}*`;
+    }
+    return out;
+}
+
+/**
+ * Formats raw JSONL transcript lines into a readable step timeline with summary.
+ */
+function formatTranscriptLog(jsonlRaw) {
+    if (!jsonlRaw || !jsonlRaw.trim()) return { summary: 'No logs available for this conversation.', raw: '' };
+    const lines = stripAnsi(jsonlRaw).trim().split('\n');
+    const steps = [];
+
+    for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+            const entry = JSON.parse(line.trim());
+            const idx = entry.step_index !== undefined ? `#${entry.step_index}` : '•';
+            const type = entry.type || entry.source || 'STEP';
+
+            if (type === 'USER_INPUT' || entry.source === 'USER_EXPLICIT') {
+                const text = (entry.content || '').trim();
+                const preview = text.length > 80 ? text.substring(0, 77) + '...' : text;
+                steps.push(`**${idx} 👤 User:** ${preview}`);
+            } else if (entry.tool_calls && entry.tool_calls.length > 0) {
+                for (const tc of entry.tool_calls) {
+                    const name = tc.name || (tc.function && tc.function.name) || 'tool';
+                    let info = '';
+                    if (tc.args) {
+                        if (tc.args.CommandLine) info = `: \`${tc.args.CommandLine.substring(0, 60)}\``;
+                        else if (tc.args.TargetFile) info = `: \`${tc.args.TargetFile}\``;
+                        else if (tc.args.AbsolutePath) info = `: \`${tc.args.AbsolutePath}\``;
+                        else if (tc.args.query) info = `: "${tc.args.query}"`;
+                    }
+                    steps.push(`**${idx} 🔧 Tool:** \`${name}\`${info}`);
+                }
+            } else if (type === 'TOOL_RESPONSE') {
+                const text = (entry.content || '').trim();
+                const preview = text.length > 60 ? text.substring(0, 57) + '...' : text;
+                steps.push(`**${idx} ⚙️ Result:** \`${preview.replace(/\n/g, ' ')}\``);
+            } else if (type === 'PLANNER_RESPONSE' || entry.source === 'MODEL') {
+                const text = (entry.content || '').trim();
+                if (text) {
+                    const preview = text.length > 90 ? text.substring(0, 87) + '...' : text;
+                    steps.push(`**${idx} 🤖 AGY:** ${preview.replace(/\n/g, ' ')}`);
+                }
+            } else {
+                steps.push(`**${idx} ℹ️ [${type}]**`);
+            }
+        } catch {
+            // Non-JSON or incomplete line ignored in timeline
+        }
+    }
+
+    let summary = `**📜 Conversation Timeline (Recent Steps):**\n\n`;
+    if (steps.length === 0) {
+        summary += `*(No structured steps parsed. View raw trace attachment below.)*\n`;
+    } else {
+        summary += steps.slice(-15).join('\n\n') + '\n';
+    }
+
+    return {
+        summary,
+        raw: jsonlRaw.trim()
+    };
+}
+
+// Wrapper calls that delegate to the active chat provider adapter with pretty formatting and attachment support
+const postMessage = (roomId, tmid, text, attachments = null) => {
+    const formatted = formatPrettyMarkdown(text);
+    return adapter.postMessage(roomId, tmid, formatted, attachments);
+};
+const updateMessage = (roomId, msgId, text, attachments = null) => {
+    const formatted = formatPrettyMarkdown(text);
+    return adapter.updateMessage(roomId, msgId, formatted, attachments);
+};
 
 async function pingOllama() {
     try {
@@ -504,18 +687,21 @@ async function executeOllamaMessage(roomId, tmid, promptText, customModel = null
         }
 
         const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
-        let reply = `[⚡ **Local Ollama** (\`${targetModel}\` • ${elapsedSec}s)]\n\n`;
-        if (result.thinking) {
-            reply += `> *Thought Process:*\n> ${result.thinking.trim().replace(/\n/g, '\n> ')}\n\n`;
+        let reply = `[⚡ **Local Ollama** (\`${targetModel}\` • ${elapsedSec}s)]\n\n${result.text}`;
+        let attachments = [];
+        if (result.thinking && result.thinking.trim()) {
+            attachments.push(makeCollapsibleAttachment(
+                `💭 Thought Process (${targetModel} • click to expand)`,
+                result.thinking.trim(),
+                null,
+                '#8b5cf6'
+            ));
         }
-        reply += result.text;
-        if (reply.length > 7000) {
-            reply = reply.substring(0, 7000) + '\n...[output truncated]';
-        }
+
         if (thinkingMsgId) {
-            await updateMessage(roomId, thinkingMsgId, reply);
+            await updateMessage(roomId, thinkingMsgId, reply, attachments.length > 0 ? attachments : null);
         } else {
-            await postMessage(roomId, tmid, reply);
+            await postMessage(roomId, tmid, reply, attachments.length > 0 ? attachments : null);
         }
     } catch (err) {
         console.error(`[Rocket-Grav] Ollama error: ${err.message}`);
@@ -741,8 +927,13 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null, ex
         child.on('error', async (error) => {
             isFinished = true;
             console.error(`Spawn error: ${error.message}`);
+            const attachments = [
+                makeCollapsibleAttachment('🔍 Process Spawn Error Trace', error.stack || error.message, 'text', '#ef4444')
+            ];
             if (thinkingMsgId) {
-                await updateMessage(roomId, thinkingMsgId, `Error: ${error.message}`);
+                await updateMessage(roomId, thinkingMsgId, `❌ **Antigravity CLI Process Spawn Error**\n${error.message}`, attachments);
+            } else {
+                await postMessage(roomId, tmid, `❌ **Antigravity CLI Process Spawn Error**\n${error.message}`, attachments);
             }
         });
 
@@ -768,20 +959,40 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null, ex
 
             isFinished = true;
             let finalOutput = '';
+            let attachments = [];
+
             if (finalResultObj) {
                 if (finalResultObj.conversation_id) {
                     updateThreadConvId(activeThreadName, finalResultObj.conversation_id);
                 }
-                finalOutput = finalResultObj.response || finalResultObj.error || JSON.stringify(finalResultObj, null, 2);
-                if (finalResultObj.error) {
-                    finalOutput += "\n\n**Raw Trace Details:**\n```json\n" + rawOutput.substring(Math.max(0, rawOutput.length - 1500)) + "\n```";
+                if (finalResultObj.response) {
+                    finalOutput = finalResultObj.response;
+                } else if (finalResultObj.error) {
+                    finalOutput = `❌ **Antigravity CLI Error**\n${finalResultObj.error}`;
+                } else {
+                    finalOutput = JSON.stringify(finalResultObj, null, 2);
+                }
+
+                if (finalResultObj.error || hasError) {
+                    const traceSnippet = rawOutput.trim() ? rawOutput.substring(Math.max(0, rawOutput.length - 2500)) : '';
+                    if (traceSnippet) {
+                        attachments.push(makeCollapsibleAttachment(
+                            '🔍 Raw Trace Details (click to expand)',
+                            traceSnippet,
+                            'json',
+                            '#ef4444'
+                        ));
+                    }
                 }
             } else {
-                finalOutput = "Error: AGY exited abruptly. Check container logs.\nRaw output trace:\n```json\n" + rawOutput.substring(Math.max(0, rawOutput.length - 1500)) + "\n```";
-            }
-
-            if (finalOutput.length > 7000) {
-                finalOutput = finalOutput.substring(0, 7000) + '\n...[output truncated]';
+                finalOutput = `❌ **Antigravity Exited Abruptly** (Exit code: \`${code}\`)\nCheck container logs or expand the diagnostic trace below.`;
+                const traceSnippet = rawOutput.trim() ? rawOutput.substring(Math.max(0, rawOutput.length - 2500)) : '(No output captured)';
+                attachments.push(makeCollapsibleAttachment(
+                    '🔍 Raw Trace Details (click to expand)',
+                    traceSnippet,
+                    'json',
+                    '#ef4444'
+                ));
             }
 
             if (imageGenerationCount > 0) {
@@ -796,9 +1007,9 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null, ex
             }
 
             if (thinkingMsgId) {
-                await updateMessage(roomId, thinkingMsgId, finalOutput);
+                await updateMessage(roomId, thinkingMsgId, finalOutput, attachments.length > 0 ? attachments : null);
             } else {
-                await postMessage(roomId, tmid, finalOutput);
+                await postMessage(roomId, tmid, finalOutput, attachments.length > 0 ? attachments : null);
             }
         });
     };
@@ -989,15 +1200,19 @@ app.post('/webhook', async (req, res) => {
         try {
             const { execFileSync } = require('child_process');
             if (!fs.existsSync('/workspace/.beads')) {
-                await postMessage(roomId, tmid, 'No Beads project initialized yet.');
+                await postMessage(roomId, tmid, 'ℹ️ No Beads project initialized in `/workspace` yet.');
                 return;
             }
             const bdPath = fs.existsSync('/usr/local/bin/bd') ? '/usr/local/bin/bd' : 'bd';
             const stdout = execFileSync(bdPath, ['list'], { cwd: '/workspace' }).toString();
-            await postMessage(roomId, tmid, `**Current Issues:**\n\`\`\`text\n${stdout.trim() || 'No open issues.'}\n\`\`\``);
+            const prettyTable = formatBeadsList(stdout);
+            await postMessage(roomId, tmid, prettyTable);
         } catch (e) {
             const errOut = e.stdout ? e.stdout.toString() : e.message;
-            await postMessage(roomId, tmid, `Error retrieving beads:\n\`\`\`text\n${errOut.trim()}\n\`\`\``);
+            const attachments = [
+                makeCollapsibleAttachment('🔍 Beads Error Trace', errOut, 'text', '#ef4444')
+            ];
+            await postMessage(roomId, tmid, `❌ **Error retrieving Beads issues**`, attachments);
         }
         return;
     }
@@ -1022,13 +1237,30 @@ app.post('/webhook', async (req, res) => {
             return;
         }
         
-        const thinkingMsgId = await postMessage(roomId, tmid, "`⠋` *Fetching logs...*");
+        const thinkingMsgId = await postMessage(roomId, tmid, "`⠋` *Fetching conversation logs...*");
         const { exec } = require('child_process');
         exec(`tail -n 25 "${logPath}"`, async (error, stdout) => {
-            let output = stdout.substring(0, 7000);
-            if (error) output = `Error: ${error.message}`;
+            if (error) {
+                if (thinkingMsgId) {
+                    await updateMessage(roomId, thinkingMsgId, `❌ **Error reading logs:** ${error.message}`);
+                }
+                return;
+            }
+
+            const parsed = formatTranscriptLog(stdout);
+            const attachments = [
+                makeCollapsibleAttachment(
+                    '📄 Raw JSONL Log (click to expand)',
+                    parsed.raw.length > 5000 ? parsed.raw.substring(0, 5000) + '\n...[truncated]' : parsed.raw,
+                    'json',
+                    '#64748b'
+                )
+            ];
+
             if (thinkingMsgId) {
-                await updateMessage(roomId, thinkingMsgId, '```json\n' + output + '\n```');
+                await updateMessage(roomId, thinkingMsgId, parsed.summary, attachments);
+            } else {
+                await postMessage(roomId, tmid, parsed.summary, attachments);
             }
         });
         return;
@@ -1166,9 +1398,15 @@ app.post('/webhook', async (req, res) => {
             const activeThread = getThreads().active_thread;
             const title = messageText.replace(/"/g, '\\"');
             const stdout = execSync(`${bdPath} create "[Epic: ${activeThread}] ${title}"`, { cwd: '/workspace' }).toString();
-            await postMessage(roomId, tmid, `[✓] Logged to Beads Issue Tracker:\n\`\`\`text\n${stdout.trim()}\n\`\`\``);
+            const cleanOut = stripAnsi(stdout).trim();
+            await postMessage(roomId, tmid, `[✓] **Logged to Beads Issue Tracker:**\n\`${cleanOut}\``);
         } catch (e) {
             console.error("Beads error:", e.message);
+            const errTrace = e.stderr ? e.stderr.toString() : (e.stdout ? e.stdout.toString() : e.message);
+            const attachments = [
+                makeCollapsibleAttachment('🔍 Beads Error Trace', errTrace, 'text', '#ef4444')
+            ];
+            await postMessage(roomId, tmid, `❌ **Error logging to Beads:** ${e.message}`, attachments);
         }
     }
 
