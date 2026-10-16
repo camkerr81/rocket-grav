@@ -64,6 +64,15 @@ const {
     formatContextUsage
 } = require('./threads');
 
+const {
+    getWorkspaceAgentsMdPath,
+    getGlobalRulesPath,
+    addMemory,
+    getMemories,
+    formatMemoryList,
+    removeMemory
+} = require('./memory');
+
 const { getAdapter } = require('./adapters');
 const adapter = getAdapter();
 console.log(`[Rocket-Grav] Initialized with chat adapter: ${adapter.name.toUpperCase()}`);
@@ -1100,6 +1109,10 @@ app.post('/webhook', async (req, res) => {
 *   \`!agy thread delete <name>\` - Delete a named thread
 *   \`!agy log\` - Show recent transcript logs of the active conversation
 *   \`!agy context\` (or \`!context\`, \`tokens\`) - Show context window usage & token capacity progress bar
+*   \`!agy remember <lesson>\` (or \`!remember\`) - Save a lesson to active project memory (AGENTS.md)
+*   \`!agy remember global <lesson>\` - Save a system-wide lesson across all projects (rules/)
+*   \`!agy memory\` (or \`lessons\`) - View current project and global lessons learned
+*   \`!agy forget <keyword>\` - Remove a saved lesson matching keyword
 *   \`!agy issues\` (or \`beads\`) - List all open beads issues
 *   \`!agy version\` - Show installed Antigravity CLI version and update status
 *   \`!agy update\` (or \`upgrade\`) - Manually check and update Antigravity CLI to latest version
@@ -1281,6 +1294,51 @@ app.post('/webhook', async (req, res) => {
     ) {
         const usageData = formatContextUsage();
         await postMessage(roomId, tmid, usageData.reply);
+        return;
+    }
+
+    // Memory & Lessons Learned Management
+    if (
+        lowerMessage === 'memory' ||
+        lowerMessage === 'memories' ||
+        lowerMessage === 'lessons' ||
+        lowerMessage === 'lessons learned' ||
+        lowerMessage === 'remember list' ||
+        lowerMessage === 'list memory'
+    ) {
+        const reply = formatMemoryList();
+        await postMessage(roomId, tmid, reply);
+        return;
+    }
+
+    if (lowerMessage.startsWith('remember ') || lowerMessage.startsWith('learn ')) {
+        const rawContent = messageText.replace(/^(?:remember|learn)\s+/i, '').trim();
+        let isGlobal = false;
+        let lessonText = rawContent;
+
+        if (/^(?:global|--global)\s+/i.test(rawContent)) {
+            isGlobal = true;
+            lessonText = rawContent.replace(/^(?:global|--global)\s+/i, '').trim();
+        }
+
+        const res = addMemory(lessonText, { isGlobal });
+        await postMessage(roomId, tmid, res.message || `[✗] ${res.error}`);
+        return;
+    }
+
+    if (lowerMessage.startsWith('forget ') || lowerMessage.startsWith('forget memory ')) {
+        const keyword = messageText.replace(/^(?:forget\s+memory|forget)\s+/i, '').trim();
+        const resProject = removeMemory(keyword, { isGlobal: false });
+        if (resProject.success) {
+            await postMessage(roomId, tmid, resProject.message);
+        } else {
+            const resGlobal = removeMemory(keyword, { isGlobal: true });
+            if (resGlobal.success) {
+                await postMessage(roomId, tmid, resGlobal.message);
+            } else {
+                await postMessage(roomId, tmid, `[✗] No memories found matching "${keyword}" in project or global rules.`);
+            }
+        }
         return;
     }
 
@@ -1660,6 +1718,16 @@ app.get('/conversations', (req, res) => {
 
 app.get('/context', (req, res) => {
     res.json(formatContextUsage());
+});
+
+app.get('/memory', (req, res) => {
+    res.json(getMemories());
+});
+
+app.post('/memory', (req, res) => {
+    const { lesson, global: isGlobal, thread } = req.body || {};
+    const result = addMemory(lesson, { isGlobal, threadName: thread });
+    res.status(result.success ? 200 : 400).json(result);
 });
 
 app.post('/update', async (req, res) => {
