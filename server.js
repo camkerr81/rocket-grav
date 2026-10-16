@@ -60,7 +60,8 @@ const {
     resolveSwitchTarget,
     formatConversationList,
     formatThreadList,
-    formatThreadStatus
+    formatThreadStatus,
+    formatContextUsage
 } = require('./threads');
 
 const { getAdapter } = require('./adapters');
@@ -357,7 +358,7 @@ function makeCollapsibleAttachment(title, content, lang = null, color = '#6366f1
 }
 
 /**
- * Formats terminal stdout from `bd list` into a clean Markdown table.
+ * Formats terminal stdout from `bd list` into a clean, universally compatible bullet list.
  */
 function formatBeadsList(stdout) {
     if (!stdout || !stdout.trim()) return 'ℹ️ No issues found in Beads.';
@@ -393,14 +394,14 @@ function formatBeadsList(stdout) {
         return `**📋 Beads Issues:**\n\`\`\`text\n${stripAnsi(stdout).trim()}\n\`\`\``;
     }
 
-    let out = '**📋 Current Beads Issues:**\n\n';
-    out += '| Status | Priority | Issue ID | Description |\n';
-    out += '|---|:---:|---|---|\n';
+    let out = `**📋 Current Beads Issues (${issues.length}):**\n\n`;
     for (const iss of issues) {
-        out += `| ${iss.status} | \`${iss.priority}\` | \`${iss.id}\` | ${iss.title} |\n`;
+        out += `• ${iss.status} \`${iss.id}\` [${iss.priority}]\n`;
+        out += `  └─ ${iss.title}\n\n`;
     }
     if (summaryText) {
-        out += `\n*${summaryText}*`;
+        out += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+        out += `*${summaryText}*`;
     }
     return out;
 }
@@ -1098,6 +1099,7 @@ app.post('/webhook', async (req, res) => {
 *   \`!agy thread reset [name]\` - Reset a thread's conversation memory
 *   \`!agy thread delete <name>\` - Delete a named thread
 *   \`!agy log\` - Show recent transcript logs of the active conversation
+*   \`!agy context\` (or \`!context\`, \`tokens\`) - Show context window usage & token capacity progress bar
 *   \`!agy issues\` (or \`beads\`) - List all open beads issues
 *   \`!agy version\` - Show installed Antigravity CLI version and update status
 *   \`!agy update\` (or \`upgrade\`) - Manually check and update Antigravity CLI to latest version
@@ -1266,8 +1268,23 @@ app.post('/webhook', async (req, res) => {
         return;
     }
 
-    // 1. List AGY Conversations
     const lowerMessage = messageText.toLowerCase().trim();
+
+    // Context Window & Token Capacity Telemetry
+    if (
+        lowerMessage === 'context' ||
+        lowerMessage === 'agy context' ||
+        lowerMessage === 'tokens' ||
+        lowerMessage === 'usage' ||
+        lowerMessage === 'context usage' ||
+        lowerMessage === 'token usage'
+    ) {
+        const usageData = formatContextUsage();
+        await postMessage(roomId, tmid, usageData.reply);
+        return;
+    }
+
+    // 1. List AGY Conversations
     if (
         lowerMessage === 'conversations' ||
         lowerMessage === 'conversation list' ||
@@ -1639,6 +1656,10 @@ app.get('/conversations', (req, res) => {
     const limit = parseInt(req.query.limit, 10) || 30;
     const convs = getRecentConversations(limit);
     res.json({ count: convs.length, conversations: convs });
+});
+
+app.get('/context', (req, res) => {
+    res.json(formatContextUsage());
 });
 
 app.post('/update', async (req, res) => {

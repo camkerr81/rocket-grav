@@ -404,7 +404,7 @@ function resolveSwitchTarget(targetStr, customPath = null) {
 }
 
 /**
- * Formats a markdown table of recent AGY conversations with thread cross-references.
+ * Formats a clean, high-compatibility list of recent AGY conversations with thread cross-references.
  */
 function formatConversationList(limit = 15, customPath = null) {
     const conversations = getRecentConversations(limit);
@@ -422,37 +422,37 @@ function formatConversationList(limit = 15, customPath = null) {
     }
 
     let reply = `**Recent Antigravity Conversations (${conversations.length}):**\n\n`;
-    reply += `| # | Title / Topic | Steps | Last Active | Thread | Conversation ID |\n`;
-    reply += `|---|---|---|---|---|---|\n`;
 
     conversations.forEach((conv, index) => {
         const num = index + 1;
         const rawTitle = getConversationTitle(conv).replace(/\|/g, '-');
-        const title = rawTitle.length > 36 ? rawTitle.substring(0, 34) + '..' : rawTitle;
+        const title = rawTitle.length > 50 ? rawTitle.substring(0, 48) + '..' : rawTitle;
         const steps = conv.step_count || 0;
         const relativeTime = formatRelativeTime(conv.last_modified_time);
         const boundThread = convToThread[conv.conversation_id.toLowerCase()];
         
-        let threadTag = '-';
+        let threadTag = '';
         if (boundThread) {
             const isActive = (boundThread === activeThread);
-            threadTag = isActive ? `\`${boundThread}\` ★` : `\`${boundThread}\``;
+            threadTag = isActive ? ` • 🏷️ \`${boundThread}\` ★ *(Active)*` : ` • 🏷️ \`${boundThread}\``;
         }
 
         const shortId = conv.conversation_id.substring(0, 8) + '...';
-        reply += `| ${num} | ${title} | ${steps} | ${relativeTime} | ${threadTag} | \`${shortId}\` |\n`;
+        reply += `**#${num}** ${boundThread && boundThread === activeThread ? '★ ' : ''}**${title}**\n`;
+        reply += `└─ ${steps} steps • ${relativeTime}${threadTag} • \`${shortId}\`\n\n`;
     });
 
-    reply += `\n★ = Active thread (\`${activeThread}\`)`;
-    reply += `\n\n*Switch by index: \`!agy switch <#num>\` (e.g. \`!agy switch 1\`)*`;
-    reply += `\n*Switch by name: \`!agy switch <thread-name>\`*`;
-    reply += `\n*Switch by UUID: \`!agy switch <uuid>\`*`;
+    reply += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    reply += `★ = Active thread (\`${activeThread}\`)\n\n`;
+    reply += `*• Switch by index: \`!agy switch <#num>\` (e.g. \`!agy switch 1\`)*\n`;
+    reply += `*• Switch by name: \`!agy switch <thread-name>\`*\n`;
+    reply += `*• Switch by UUID: \`!agy switch <uuid>\`*`;
 
     return reply;
 }
 
 /**
- * Formats a markdown list of all named threads in threads.json.
+ * Formats a clean list of all named threads in threads.json.
  */
 function formatThreadList(customPath = null) {
     const data = getThreads(customPath);
@@ -502,25 +502,24 @@ function formatThreadList(customPath = null) {
     });
 
     let reply = `**Managed Threads (${threadEntries.length}):**\n\n`;
-    reply += `| # | Status | Thread Name | Details | Last Active | Conversation ID |\n`;
-    reply += `|---|---|---|---|---|---|\n`;
 
     threadEntries.forEach((entry, idx) => {
         const num = idx + 1;
-        const statusMark = entry.isActive ? `★ **ACTIVE**` : ``;
+        const statusMark = entry.isActive ? `★ *(Active)*` : ``;
         const shortConv = entry.convId ? `\`${entry.convId.substring(0, 8)}...\`` : `*(none)*`;
         const cleanTitle = entry.title.replace(/\|/g, '-');
-        const truncatedTitle = cleanTitle.length > 30 ? cleanTitle.substring(0, 28) + '..' : cleanTitle;
-        const details = entry.convId ? `"${truncatedTitle}" (${entry.steps} steps)` : `*Fresh*`;
+        const truncatedTitle = cleanTitle.length > 50 ? cleanTitle.substring(0, 48) + '..' : cleanTitle;
         const timeAgo = entry.lastModified ? formatRelativeTime(entry.lastModified) : '-';
 
-        reply += `| ${num} | ${statusMark} | \`${entry.name}\` | ${details} | ${timeAgo} | ${shortConv} |\n`;
+        reply += `**#${num}** ${entry.isActive ? '★ ' : ''}\`${entry.name}\` ${statusMark}\n`;
+        reply += `└─ "${truncatedTitle}" • ${entry.steps} steps • ${timeAgo} • ${shortConv}\n\n`;
     });
 
-    reply += `\n★ = Active thread (\`${active}\`)`;
-    reply += `\n\n*Switch thread: \`!agy switch <name>\` (e.g. \`!agy switch ${threadEntries[1] ? threadEntries[1].name : 'default'}\`)*`;
-    reply += `\n*Switch by index: \`!agy switch <#num>\` | List all: \`!agy conversations\`*`;
-    reply += `\n*Manage: \`!agy thread new <name>\` | \`!agy thread reset [name]\` | \`!agy thread delete <name>\`*`;
+    reply += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    reply += `★ = Active thread (\`${active}\`)\n\n`;
+    reply += `*• Switch thread: \`!agy switch <name>\` (e.g. \`!agy switch ${threadEntries[1] ? threadEntries[1].name : 'default'}\`)*\n`;
+    reply += `*• Switch by index: \`!agy switch <#num>\` | List all: \`!agy conversations\`*\n`;
+    reply += `*• Manage: \`!agy thread new <name>\` | \`!agy thread reset [name]\` | \`!agy thread delete <name>\`*`;
 
     return reply;
 }
@@ -562,6 +561,109 @@ function formatThreadStatus(customPath = null) {
     return reply;
 }
 
+/**
+ * Computes and formats visual context window token usage for the active thread.
+ */
+function formatContextUsage(customPath = null) {
+    const data = getThreads(customPath);
+    const activeThread = data.active_thread || 'default';
+    const convId = data.threads[activeThread];
+
+    if (!convId) {
+        return {
+            reply: `ℹ️ Active thread \`${activeThread}\` has no active conversation yet. Send a prompt to start one!`
+        };
+    }
+
+    const candidateLogPaths = [
+        path.join(process.env.HOME || '', `.gemini/antigravity-cli/brain/${convId}/.system_generated/logs/transcript.jsonl`),
+        `/root/.gemini/antigravity-cli/brain/${convId}/.system_generated/logs/transcript.jsonl`,
+        path.join(os.homedir(), `.gemini/antigravity-cli/brain/${convId}/.system_generated/logs/transcript.jsonl`)
+    ].filter(Boolean);
+
+    const logPath = candidateLogPaths.find(p => fs.existsSync(p));
+    if (!logPath) {
+        return {
+            reply: `ℹ️ Log file not found for conversation \`${convId}\`. Have you sent a prompt in thread \`${activeThread}\` yet?`
+        };
+    }
+
+    try {
+        const raw = fs.readFileSync(logPath, 'utf8').trim().split('\n');
+        let latestTokens = null;
+        let stepCount = 0;
+
+        for (let i = raw.length - 1; i >= 0; i--) {
+            try {
+                const entry = JSON.parse(raw[i]);
+                if (stepCount === 0 && entry.step_index !== undefined) {
+                    stepCount = entry.step_index;
+                }
+                if (!latestTokens && (entry.input_tokens !== undefined || (entry.usage && entry.usage.input_tokens !== undefined))) {
+                    latestTokens = {
+                        input_tokens: entry.input_tokens || (entry.usage && entry.usage.input_tokens) || 0,
+                        cache_read_tokens: entry.cache_read_tokens || (entry.usage && entry.usage.cache_read_tokens) || 0,
+                        output_tokens: entry.output_tokens || (entry.usage && entry.usage.output_tokens) || 0,
+                        step_index: entry.step_index
+                    };
+                }
+                if (stepCount > 0 && latestTokens) break;
+            } catch (_) {}
+        }
+
+        if (!latestTokens) {
+            return {
+                reply: `ℹ️ No token usage telemetry recorded for conversation \`${convId}\` yet.`
+            };
+        }
+
+        const cached = latestTokens.cache_read_tokens;
+        const input = latestTokens.input_tokens;
+        const output = latestTokens.output_tokens;
+        const totalActive = cached + input;
+        const maxLimit = 256000;
+        const pctNum = Math.min(100, (totalActive / maxLimit) * 100);
+        const pct = pctNum.toFixed(1);
+        const filled = Math.min(20, Math.max(0, Math.round((pctNum / 100) * 20)));
+        const progressBar = '█'.repeat(filled) + '░'.repeat(20 - filled);
+        const remaining = Math.max(0, maxLimit - totalActive);
+
+        let statusText = '🟢 Context Healthy (Well within limits)';
+        if (pctNum >= 90) {
+            statusText = '🔴 Context Critical (Approaching automatic compaction threshold)';
+        } else if (pctNum >= 75) {
+            statusText = '🟡 Context Elevated (Consider /compact if starting major new refactor)';
+        }
+
+        let reply = `📊 **Context Window Usage** (\`${activeThread}\`)\n`;
+        reply += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+        reply += `**Usage:** \`${totalActive.toLocaleString()}\` / \`${maxLimit.toLocaleString()}\` tokens (**${pct}%**)\n`;
+        reply += `\`[${progressBar}] ${pct}%\`\n\n`;
+        reply += `• ⚡ **Cached History & System:** \`${cached.toLocaleString()}\` tokens (${((cached / (totalActive || 1)) * 100).toFixed(1)}%)\n`;
+        reply += `• 📥 **Current Turn Input:** \`${input.toLocaleString()}\` tokens (${((input / (totalActive || 1)) * 100).toFixed(1)}%)\n`;
+        reply += `• 📤 **Last Turn Output:** \`${output.toLocaleString()}\` tokens\n`;
+        reply += `• 🏷️ **Total Active Context:** \`${totalActive.toLocaleString()}\` tokens\n`;
+        reply += `• 🪟 **Remaining to Compaction:** \`${remaining.toLocaleString()}\` tokens (${((remaining / maxLimit) * 100).toFixed(1)}%)\n\n`;
+        reply += `• **Active Thread:** \`${activeThread}\` (\`${convId.substring(0, 8)}...\`)\n`;
+        reply += `• **Step Count:** ${stepCount || raw.length} steps\n`;
+        reply += `• **Status:** ${statusText}\n`;
+
+        return {
+            reply,
+            totalActive,
+            maxLimit,
+            pct,
+            cached,
+            input,
+            output
+        };
+    } catch (err) {
+        return {
+            reply: `❌ Failed to read context usage: ${err.message}`
+        };
+    }
+}
+
 module.exports = {
     getThreadsFilePath,
     getConversationDbPath,
@@ -577,6 +679,7 @@ module.exports = {
     formatConversationList,
     formatThreadList,
     formatThreadStatus,
+    formatContextUsage,
     formatRelativeTime,
     getConversationTitle,
     slugify

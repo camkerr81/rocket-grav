@@ -27,7 +27,7 @@ COPY package.json package-lock.json* ./
 RUN npm install
 
 # Copy server code, adapters, and MCP servers
-ARG SOURCE_BUILD=20261016_collapsible_traces
+ARG SOURCE_BUILD=20261016_context_and_thread_list_fix
 COPY server.js threads.js ./
 COPY adapters/ ./adapters/
 COPY mcp/ ./mcp/
