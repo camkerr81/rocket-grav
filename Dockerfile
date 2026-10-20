@@ -27,17 +27,18 @@ COPY package.json package-lock.json* ./
 RUN npm install
 
 # Copy server code, adapters, MCP servers, and Braille tooling
-ARG SOURCE_BUILD=20261021_braille_iconography_enforcement
+ARG SOURCE_BUILD=20261021_braille_iconography_enforcement_v2
 COPY server.js threads.js memory.js queue.js git_sync.js ollama.js braille.js braille_map.json pyproject.toml ./
 COPY adapters/ ./adapters/
 COPY mcp/ ./mcp/
 COPY braille_icon/ ./braille_icon/
+COPY bin/ ./bin/
 COPY skills/ ./skills/
 COPY skills/ /root/.gemini/antigravity-cli/skills/
 COPY .gemini/ /root/.gemini/
 
-# Install braille-icon CLI tool and ensure globally available
-RUN pip3 install --break-system-packages -e . && ln -sf /usr/local/bin/braille-icon /usr/bin/braille-icon || true
+# Make braille-icon CLI tool globally available
+RUN chmod +x ./bin/braille-icon && ln -sf /app/bin/braille-icon /usr/local/bin/braille-icon && ln -sf /app/bin/braille-icon /usr/bin/braille-icon
 
 # Make ollama-mcp executable and globally available
 RUN chmod +x ./mcp/ollama-mcp.js && ln -sf /app/mcp/ollama-mcp.js /usr/local/bin/ollama-mcp
