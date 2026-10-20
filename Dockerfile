@@ -27,8 +27,8 @@ COPY package.json package-lock.json* ./
 RUN npm install
 
 # Copy server code, adapters, and MCP servers
-ARG SOURCE_BUILD=20261020_fifo_queue_service
-COPY server.js threads.js memory.js queue.js ./
+ARG SOURCE_BUILD=20261020_cross_device_git_handoff
+COPY server.js threads.js memory.js queue.js git_sync.js ./
 COPY adapters/ ./adapters/
 COPY mcp/ ./mcp/
 

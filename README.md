@@ -270,6 +270,10 @@ Rocket-Grav includes a bundled Model Context Protocol (MCP) server located in `m
 |---|---|---|
 | `!agy threads` / `!agy thread list` | Lists all threads and marks the active one. | `!agy threads` |
 | `!agy thread switch <name>` | Switches to an existing thread or creates a new one. | `!agy thread switch auth-refactor` |
+| `!agy bind <repo>` | Binds the active thread to a Gitea repository (clones if needed). | `!agy bind rocket-grav` |
+| `!agy repos` | Lists all threads and their bound repository sync status. | `!agy repos` |
+| `!agy pull` | Manually pulls and rebases the active thread's bound repo from Gitea. | `!agy pull` |
+| `!agy push` | Manually commits and pushes local changes to Gitea for the active thread. | `!agy push` |
 
 ### 7. Versioning, Diagnostics & Endpoints
 
@@ -300,6 +304,24 @@ When multiple prompt requests are sent in rapid succession, Rocket-Grav enqueues
 | `POST /update` | REST API | Triggers on-demand Antigravity CLI update via HTTP. |
 | `POST /webhook` | REST API | Inbound webhook endpoint for chat platforms or external automation scripts. |
 | `GET /assets` | Web UI | Static gallery viewer for generated images and assets. |
+
+### 9. Cross-Device Git Handoff (Laptop ⇄ Chat Bridge)
+
+Rocket-Grav provides seamless cross-device workflow handoff. When you commit and push progress from your laptop to Gitea, you can immediately pick up where you left off via Rocket.Chat:
+
+* • **Pre-flight Sync:** Before every AGY or Ollama prompt turn, Rocket-Grav automatically checks the repository bound to the active thread. If uncommitted changes exist, it stashes them (`git stash push -u`), fetches from Gitea (`git fetch origin`), pulls new commits from your laptop via rebase (`git pull --rebase`), and pops your stash.
+* • **Conflict Alerting:** If popping a stash creates git merge conflicts, Rocket-Grav pauses execution and notifies you in chat with the conflicting files so nothing is silently overwritten.
+* • **Post-Turn Auto-Push:** As soon as AGY finishes generating code or refactoring, Rocket-Grav stages all modifications (`git add -A`), creates a structured commit containing the thread name and prompt summary, and pushes back to Gitea (`git push origin <branch>`). When you return to your laptop, run `git pull` to resume locally with zero friction!
+
+| Command / Endpoint | Type | Description | Example |
+|---|---|---|---|
+| `!agy bind <repo>` | Chat Command | Binds active thread to a repo (e.g. `camkerr81/my-repo` or `my-repo`). Clones if missing. | `!agy bind rocket-grav` |
+| `!agy repos` | Chat Command | Displays status of all bound repositories (branch, commit, ahead/behind Gitea). | `!agy repos` |
+| `!agy pull` | Chat Command | Runs pre-flight stash, fetch, and rebase pull on the active thread's repo. | `!agy pull` |
+| `!agy push` | Chat Command | Stages, commits, and pushes any local changes to Gitea for the active thread. | `!agy push` |
+| `GET /repos` | REST Endpoint | Returns JSON mapping of threads to repositories and their sync status. | `curl http://localhost:8080/repos` |
+| `POST /repos/bind` | REST Endpoint | Dynamically binds a thread to a repository via HTTP. | `curl -X POST http://localhost:8080/repos/bind -d '{"thread":"default","repo":"rocket-grav"}'` |
+| `POST /repos/sync` | REST Endpoint | Triggers manual pre-flight pull or post-turn push via HTTP. | `curl -X POST http://localhost:8080/repos/sync -d '{"action":"pull"}'` |
 
 ---
 

@@ -75,6 +75,16 @@ const {
 
 const { queueManager } = require('./queue');
 
+const {
+    getThreadRepoDir,
+    syncPreFlight,
+    syncPostTurn,
+    setThreadRepoMapping,
+    getThreadRepoMapping,
+    ensureRepoCloned,
+    formatRepoStatusList
+} = require('./git_sync');
+
 const { getAdapter } = require('./adapters');
 const adapter = getAdapter();
 console.log(`[Rocket-Grav] Initialized with chat adapter: ${adapter.name.toUpperCase()}`);
@@ -800,7 +810,7 @@ async function refinePromptWithOllama(promptText, model = null) {
     }
 }
 
-async function runAgySession(roomId, tmid, messageText, existingMsgId = null, extraContext = null, onComplete = null) {
+async function runAgySession(roomId, tmid, messageText, existingMsgId = null, extraContext = null, onComplete = null, repoDir = null, preFlightNotice = '') {
     // Post the placeholder spinner message if not already existing
     let thinkingMsgId = existingMsgId;
     if (!thinkingMsgId) {
@@ -861,7 +871,8 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null, ex
 
     const executeAgy = (attempt = 1) => {
         console.log(`Executing (Attempt ${attempt}/3): agy ${commandArgs.join(' ')}`);
-        const child = spawn('agy', commandArgs, { cwd: '/workspace', shell: false });
+        const targetCwd = repoDir || '/workspace';
+        const child = spawn('agy', commandArgs, { cwd: targetCwd, shell: false });
         if (convId) activeProcesses[convId] = child;
         queueManager.attachProcess(child);
         
@@ -1024,6 +1035,19 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null, ex
                 finalOutput = `> 💡 **Refined Prompt (${extraContext.latencySec}s):** *${extraContext.refinedPrompt}*\n\n` + finalOutput;
             }
 
+            // Post-turn Git Auto-commit & push back to Gitea
+            const targetCwd = repoDir || '/workspace';
+            const postSync = syncPostTurn(targetCwd, { threadName: activeThreadName });
+            if (postSync.committed && postSync.pushed) {
+                finalOutput += `\n\n*(🚀 Auto-committed & pushed to Gitea: \`${postSync.commitHash}\` on \`${postSync.branch}\`)*`;
+            } else if (postSync.committed && !postSync.pushed) {
+                finalOutput += `\n\n*(⚠️ Committed \`${postSync.commitHash}\` locally, but push to Gitea failed: ${postSync.pushError})*`;
+            }
+
+            if (preFlightNotice) {
+                finalOutput = preFlightNotice + finalOutput;
+            }
+
             if (thinkingMsgId) {
                 await updateMessage(roomId, thinkingMsgId, finalOutput, attachments.length > 0 ? attachments : null);
             } else {
@@ -1093,6 +1117,21 @@ async function executePromptJob(job) {
     };
 
     try {
+        const activeThreadName = threadName || getThreads().active_thread || 'default';
+        const repoDir = getThreadRepoDir(activeThreadName);
+        console.log(`[Rocket-Grav] Job ${job.id} targeting repoDir: ${repoDir} for thread: "${activeThreadName}"`);
+
+        // Pre-flight Git Sync (Auto-stash, Fetch, Pull --rebase, Stash-pop)
+        const preFlight = syncPreFlight(repoDir);
+        let preFlightNotice = '';
+        if (preFlight.isGit && preFlight.newCommits > 0) {
+            preFlightNotice = `📥 *Synced ${preFlight.newCommits} new commit(s) from Gitea (${preFlight.headHash}) before commencing.*\n\n`;
+            console.log(`[Rocket-Grav] Pre-flight: synced ${preFlight.newCommits} commit(s) from Gitea in ${repoDir}`);
+        }
+        if (preFlight.stashConflict) {
+            await postMessage(roomId, tmid, `⚠️ **Git Merge Conflict during Pre-Flight Stash Pop in \`${path.basename(repoDir)}\`**\nPlease check local files or commit manually.`);
+        }
+
         if (isOllamaDirect) {
             console.log(`[Rocket-Grav] Executing direct Ollama prompt from job ${job.id}`);
             await executeOllamaMessage(roomId, tmid, ollamaPrompt, null, null, onComplete);
@@ -1117,13 +1156,13 @@ async function executePromptJob(job) {
             console.log(`[Rocket-Grav] Offloading to local Ollama (${ollamaModel})`);
             await executeOllamaMessage(roomId, tmid, messageText, null, (fallbackThinkingMsgId) => {
                 // Fallback to AGY if Ollama fails
-                runAgySession(roomId, tmid, messageText, fallbackThinkingMsgId, null, onComplete);
+                runAgySession(roomId, tmid, messageText, fallbackThinkingMsgId, null, onComplete, repoDir, preFlightNotice);
             }, onComplete);
             return;
         }
 
         // Route to full Antigravity CLI session
-        runAgySession(roomId, tmid, messageText, existingMsgId, refinedContext, onComplete);
+        runAgySession(roomId, tmid, messageText, existingMsgId, refinedContext, onComplete, repoDir, preFlightNotice);
     } catch (err) {
         console.error(`[Queue] Error executing job ${job.id}:`, err);
         await postMessage(roomId, tmid, `❌ **Job Execution Error**: ${err.message}`);
@@ -1221,6 +1260,10 @@ app.post('/webhook', async (req, res) => {
 *   \`!agy cancel\` (or \`abort\`) - Cancel the currently running task
 *   \`!agy clear queue\` - Clear all pending prompts from the queue
 *   \`!agy cancel all\` - Cancel active task and clear the entire queue
+*   \`!agy bind <repo>\` - Bind active thread to a Gitea repository (e.g. \`camkerr81/omarchy-launcher\`)
+*   \`!agy repos\` - Show all threads and their bound Git repositories & sync status
+*   \`!agy pull\` (or \`sync\`) - Manually sync & pull latest commits from Gitea
+*   \`!agy push\` - Manually commit & push all local changes to Gitea
 *   \`!agy issues\` (or \`beads\`) - List all open beads issues
 *   \`!agy version\` - Show installed Antigravity CLI version and update status
 *   \`!agy update\` (or \`upgrade\`) - Manually check and update Antigravity CLI to latest version
@@ -1499,6 +1542,87 @@ app.post('/webhook', async (req, res) => {
     ) {
         const cancelResult = queueManager.cancelActive();
         await postMessage(roomId, tmid, cancelResult.message);
+        return;
+    }
+
+    // Git Sync & Repository Binding Commands
+    if (lowerMessage === 'repos' || lowerMessage === 'agy repos' || lowerMessage === 'git status' || lowerMessage === 'repo status') {
+        const reply = formatRepoStatusList();
+        await postMessage(roomId, tmid, reply);
+        return;
+    }
+
+    if (lowerMessage.startsWith('bind ') || lowerMessage.startsWith('thread repo ')) {
+        const repoArg = messageText.replace(/^(?:bind|thread\s+repo)\s+/i, '').trim();
+        const activeThread = getThreads().active_thread || 'default';
+        if (!repoArg) {
+            await postMessage(roomId, tmid, `Please provide a repository slug or URL, e.g. \`!agy bind camkerr81/omarchy-launcher\``);
+            return;
+        }
+
+        const thinkingMsgId = await postMessage(roomId, tmid, `\`⠋\` *Binding thread \`${activeThread}\` and cloning \`${repoArg}\` if needed...*`);
+        const cloneResult = ensureRepoCloned(activeThread, repoArg);
+        if (cloneResult.success) {
+            const reply = `[✓] **Thread \`${activeThread}\` bound to repository:** \`${repoArg}\`\n└─ Working Directory: \`${cloneResult.targetDir}\``;
+            if (thinkingMsgId) {
+                await updateMessage(roomId, thinkingMsgId, reply);
+            } else {
+                await postMessage(roomId, tmid, reply);
+            }
+        } else {
+            const errReply = `[✗] **Failed to bind/clone repository:** ${cloneResult.error}`;
+            if (thinkingMsgId) {
+                await updateMessage(roomId, thinkingMsgId, errReply);
+            } else {
+                await postMessage(roomId, tmid, errReply);
+            }
+        }
+        return;
+    }
+
+    if (lowerMessage === 'pull' || lowerMessage === 'sync' || lowerMessage === 'git pull' || lowerMessage === 'agy pull') {
+        const activeThread = getThreads().active_thread || 'default';
+        const repoDir = getThreadRepoDir(activeThread);
+        const thinkingMsgId = await postMessage(roomId, tmid, `\`⠋\` *Checking Gitea for updates in \`${path.basename(repoDir)}\`...*`);
+        const res = syncPreFlight(repoDir);
+        let reply = '';
+        if (!res.isGit) {
+            reply = `ℹ️ Directory \`${path.basename(repoDir)}\` for thread \`${activeThread}\` is not a Git repository.`;
+        } else if (res.newCommits > 0) {
+            reply = `[✓] **Synced ${res.newCommits} new commit(s) from Gitea:**\n* Branch: \`${res.branch}\`\n* Latest: \`${res.commitSummary || res.headHash}\``;
+        } else if (res.error) {
+            reply = `[⚠️] **Git fetch/pull warning:** ${res.error}`;
+        } else {
+            reply = `[✓] **Already up to date with Gitea:** \`${res.branch}\` at \`${res.headHash}\``;
+        }
+        if (thinkingMsgId) {
+            await updateMessage(roomId, thinkingMsgId, reply);
+        } else {
+            await postMessage(roomId, tmid, reply);
+        }
+        return;
+    }
+
+    if (lowerMessage === 'push' || lowerMessage === 'git push' || lowerMessage === 'agy push') {
+        const activeThread = getThreads().active_thread || 'default';
+        const repoDir = getThreadRepoDir(activeThread);
+        const thinkingMsgId = await postMessage(roomId, tmid, `\`⠋\` *Committing and pushing changes in \`${path.basename(repoDir)}\` to Gitea...*`);
+        const res = syncPostTurn(repoDir, { threadName: activeThread });
+        let reply = '';
+        if (!res.isGit) {
+            reply = `ℹ️ Directory \`${path.basename(repoDir)}\` for thread \`${activeThread}\` is not a Git repository.`;
+        } else if (res.committed && res.pushed) {
+            reply = `[✓] **Committed & Pushed to Gitea:** \`${res.commitHash}\` on \`${res.branch}\` (${res.changedFilesCount} files).`;
+        } else if (res.committed && !res.pushed) {
+            reply = `[⚠️] **Committed locally (\`${res.commitHash}\`), but push failed:** ${res.pushError}`;
+        } else {
+            reply = `[✓] Working directory in \`${path.basename(repoDir)}\` is clean. Nothing to push.`;
+        }
+        if (thinkingMsgId) {
+            await updateMessage(roomId, thinkingMsgId, reply);
+        } else {
+            await postMessage(roomId, tmid, reply);
+        }
         return;
     }
 
@@ -1910,6 +2034,27 @@ app.post('/queue/clear', (req, res) => {
 
 app.post('/queue/cancel', (req, res) => {
     const result = queueManager.cancelActive();
+    res.json(result);
+});
+
+app.get('/repos', (req, res) => {
+    res.json({
+        rendered: formatRepoStatusList(),
+        threads: getThreads()
+    });
+});
+
+app.post('/repos/bind', (req, res) => {
+    const { thread, repo } = req.body || {};
+    if (!thread || !repo) return res.status(400).json({ error: 'thread and repo required' });
+    const result = ensureRepoCloned(thread, repo);
+    res.json(result);
+});
+
+app.post('/repos/sync', (req, res) => {
+    const thread = (req.body && req.body.thread) || getThreads().active_thread;
+    const repoDir = getThreadRepoDir(thread);
+    const result = syncPreFlight(repoDir);
     res.json(result);
 });
 

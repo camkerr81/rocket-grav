@@ -49,12 +49,15 @@ function getThreads(customPath = null) {
             if (!parsed.active_thread || typeof parsed.active_thread !== 'string') {
                 parsed.active_thread = 'default';
             }
+            if (!parsed.thread_repos || typeof parsed.thread_repos !== 'object') {
+                parsed.thread_repos = {};
+            }
             return parsed;
         }
     } catch (e) {
         console.error(`[Threads] Warning: Failed to read threads from ${targetFile}: ${e.message}`);
     }
-    return { active_thread: 'default', threads: {} };
+    return { active_thread: 'default', threads: {}, thread_repos: {} };
 }
 
 function saveThreads(data, customPath = null) {
