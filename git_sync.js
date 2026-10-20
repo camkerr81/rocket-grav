@@ -285,10 +285,104 @@ function syncPreFlight(repoDir) {
     }
 }
 
+const KNOWN_SECRET_PATTERNS = [
+    { pattern: /-----BEGIN (?:RSA|EC|OPENSSH|PGP|DSA) PRIVATE KEY-----/i, name: 'Private Key' },
+    { pattern: /ghp_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{82}/, name: 'GitHub Personal Access Token' },
+    { pattern: /glpat-[a-zA-Z0-9\-]{20,}/, name: 'GitLab Personal Access Token' },
+    { pattern: /xox[baprs]-[0-9a-zA-Z]{10,}/, name: 'Slack Bot / App Token' },
+    { pattern: /AIza[0-9A-Za-z\-_]{35}/, name: 'Google API Key' },
+    { pattern: /sk-[a-zA-Z0-9]{32,}/, name: 'OpenAI Secret Key' }
+];
+
+/**
+ * Scans a git diff for sensitive credentials, private keys, or API tokens.
+ * Uses fast regex matching followed by local Ollama AI inspection.
+ */
+async function scanDiffForSecrets(diffText) {
+    if (!diffText || !diffText.trim()) return { safe: true };
+
+    // 1. Fast heuristic pattern check
+    for (const { pattern, name } of KNOWN_SECRET_PATTERNS) {
+        if (pattern.test(diffText)) {
+            return {
+                safe: false,
+                reason: `Detected pattern matching ${name}`
+            };
+        }
+    }
+
+    // 2. Local Ollama AI security inspection on added lines
+    try {
+        const { queryOllama } = require('./ollama');
+        const addedLines = diffText
+            .split('\n')
+            .filter(line => line.startsWith('+') && !line.startsWith('+++'))
+            .map(line => line.substring(1))
+            .join('\n');
+
+        if (!addedLines.trim()) return { safe: true };
+
+        const sample = addedLines.substring(0, 2500);
+        const systemPrompt = "You are a git security scanner. Inspect the code additions for leaked secrets (API keys, private keys, production passwords, credentials). If clean and safe, return ONLY 'SAFE'. If a secret is leaked, return 'LEAK: <brief reason>'. Do not report placeholders, dummy tests, or public identifiers.";
+
+        const result = await queryOllama(sample, {
+            system: systemPrompt,
+            timeoutMs: 6000
+        });
+
+        const reply = (result.text || '').trim();
+        if (reply.toUpperCase().startsWith('LEAK:')) {
+            return {
+                safe: false,
+                reason: reply.replace(/^LEAK:\s*/i, '').trim()
+            };
+        }
+    } catch (e) {
+        console.warn(`[GitSync] Ollama secret scan bypassed due to error: ${e.message}`);
+    }
+
+    return { safe: true };
+}
+
+/**
+ * Generates a concise conventional git commit message using local Ollama.
+ */
+async function generateAiCommitMessage(diffStat, promptText, options = {}) {
+    const threadName = options.threadName || 'default';
+    const fallback = `chore(agy): autonomous updates from Rocket.Chat [${threadName}]`;
+
+    try {
+        const { queryOllama } = require('./ollama');
+        const systemPrompt = "You are a git commit assistant. Return ONLY a single-line conventional commit message (format: type(scope): summary under 72 chars, e.g. 'feat(auth): add refresh token handler' or 'fix(api): handle null response'). No markdown, no quotes, no explanation.";
+
+        const content = [
+            promptText ? `User Prompt: ${promptText.trim().substring(0, 300)}` : null,
+            diffStat ? `Git diff stat:\n${diffStat.substring(0, 500)}` : null
+        ].filter(Boolean).join('\n\n');
+
+        if (!content) return fallback;
+
+        const result = await queryOllama(content, {
+            system: systemPrompt,
+            timeoutMs: 8000
+        });
+
+        const reply = (result.text || '').trim().replace(/^[`"']+|[`"']+$/g, '');
+        if (reply && /^(?:feat|fix|chore|refactor|docs|style|test|perf|ci)(?:\([a-zA-Z0-9_\-\.]+\))?:\s+.+/i.test(reply) && reply.length <= 100) {
+            return reply;
+        }
+    } catch (e) {
+        console.warn(`[GitSync] AI commit message generation bypassed: ${e.message}`);
+    }
+
+    return fallback;
+}
+
 /**
  * Post-turn git synchronization: auto-commits and pushes finished AGY changes.
+ * Scans for secrets and generates an AI conventional commit message via local Ollama.
  */
-function syncPostTurn(repoDir, options = {}) {
+async function syncPostTurn(repoDir, options = {}) {
     ensureGitConfig();
 
     if (!repoDir || !fs.existsSync(path.join(repoDir, '.git'))) {
@@ -307,25 +401,52 @@ function syncPostTurn(repoDir, options = {}) {
 
         const changedFilesCount = statusOut.split('\n').filter(Boolean).length;
 
-        // 2. Determine active branch
+        // 2. Stage all changes
+        execSync('git add -A', execOpts);
+
+        // 3. Scan staged changes for secrets before committing
+        let stagedDiff = '';
+        let stagedStat = '';
+        try {
+            stagedDiff = execSync('git diff --cached', execOpts).toString();
+            stagedStat = execSync('git diff --cached --stat', execOpts).toString().trim();
+        } catch (_) {}
+
+        const secScan = await scanDiffForSecrets(stagedDiff);
+        if (!secScan.safe) {
+            console.warn(`[GitSync] ⚠️ Security alert in ${path.basename(repoDir)}: ${secScan.reason}. Unstaging changes.`);
+            try {
+                execSync('git reset HEAD', execOpts);
+            } catch (_) {}
+            return {
+                isGit: true,
+                modified: true,
+                committed: false,
+                pushed: false,
+                secretDetected: true,
+                secretReason: secScan.reason,
+                changedFilesCount
+            };
+        }
+
+        // 4. Determine active branch
         let branch = 'main';
         try {
             branch = execSync('git rev-parse --abbrev-ref HEAD', execOpts).toString().trim() || 'main';
         } catch (_) {}
 
-        // 3. Stage all changes
-        execSync('git add -A', execOpts);
-
-        // 4. Commit changes
-        const commitMsg = options.commitMessage ||
-            `chore(agy): autonomous updates from Rocket.Chat [${threadName}]\n\nModified ${changedFilesCount} file(s) via Antigravity session.`;
+        // 5. Generate commit message (AI-assisted or fallback)
+        let commitMsg = options.commitMessage;
+        if (!commitMsg) {
+            commitMsg = await generateAiCommitMessage(stagedStat, options.promptText, { threadName });
+        }
 
         execSync(`git commit -m "${commitMsg.replace(/"/g, '\\"')}"`, execOpts);
 
         const shortHash = execSync('git rev-parse --short HEAD', execOpts).toString().trim();
-        console.log(`[GitSync] Committed ${shortHash} (${changedFilesCount} files) in ${path.basename(repoDir)}`);
+        console.log(`[GitSync] Committed ${shortHash} (${changedFilesCount} files) in ${path.basename(repoDir)}: "${commitMsg}"`);
 
-        // 5. Push to Gitea origin
+        // 6. Push to Gitea origin
         let pushed = false;
         try {
             execSync(`git push origin ${branch}`, execOpts);
@@ -339,6 +460,7 @@ function syncPostTurn(repoDir, options = {}) {
                 committed: true,
                 pushed: false,
                 commitHash: shortHash,
+                commitMessage: commitMsg,
                 branch,
                 changedFilesCount,
                 pushError: pushErr.message
@@ -351,6 +473,7 @@ function syncPostTurn(repoDir, options = {}) {
             committed: true,
             pushed: true,
             commitHash: shortHash,
+            commitMessage: commitMsg,
             branch,
             changedFilesCount
         };
@@ -407,5 +530,7 @@ module.exports = {
     ensureRepoCloned,
     syncPreFlight,
     syncPostTurn,
+    scanDiffForSecrets,
+    generateAiCommitMessage,
     formatRepoStatusList
 };

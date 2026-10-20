@@ -27,8 +27,8 @@ COPY package.json package-lock.json* ./
 RUN npm install
 
 # Copy server code, adapters, and MCP servers
-ARG SOURCE_BUILD=20261020_cross_device_git_handoff
-COPY server.js threads.js memory.js queue.js git_sync.js ./
+ARG SOURCE_BUILD=20261020_local_model_handoff
+COPY server.js threads.js memory.js queue.js git_sync.js ollama.js ./
 COPY adapters/ ./adapters/
 COPY mcp/ ./mcp/
 

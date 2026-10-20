@@ -70,8 +70,20 @@ const {
     addMemory,
     getMemories,
     formatMemoryList,
-    removeMemory
+    removeMemory,
+    autoDistillAndSaveLesson
 } = require('./memory');
+
+const {
+    getOllamaUrl,
+    setOllamaUrl,
+    getOllamaModel,
+    setOllamaModel,
+    pingOllama,
+    listOllamaModels,
+    queryOllama,
+    isOllamaRefusal
+} = require('./ollama');
 
 const { queueManager } = require('./queue');
 
@@ -499,57 +511,6 @@ const updateMessage = (roomId, msgId, text, attachments = null) => {
     return adapter.updateMessage(roomId, msgId, formatted, attachments);
 };
 
-async function pingOllama() {
-    try {
-        const startTime = Date.now();
-        const res = await fetch(`${ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(4000) });
-        const latency = Date.now() - startTime;
-        if (!res.ok) return { ok: false, error: `HTTP ${res.status}`, latency };
-        const data = await res.json();
-        return { ok: true, latency, models: (data.models || []).map(m => m.name) };
-    } catch (e) {
-        return { ok: false, error: e.message, latency: -1 };
-    }
-}
-
-async function listOllamaModels() {
-    const res = await fetch(`${ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(6000) });
-    if (!res.ok) throw new Error(`Ollama HTTP ${res.status}`);
-    const data = await res.json();
-    return data.models || [];
-}
-
-async function queryOllama(prompt, options = {}) {
-    const model = options.model || ollamaModel;
-    const body = {
-        model,
-        prompt,
-        stream: false
-    };
-    if (options.system) body.system = options.system;
-    if (options.think !== undefined) body.think = options.think;
-
-    const res = await fetch(`${ollamaUrl}/api/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(options.timeoutMs || 60000)
-    });
-
-    if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(`Ollama HTTP ${res.status}: ${errText}`);
-    }
-
-    const data = await res.json();
-    return {
-        text: data.response || '',
-        thinking: data.thinking || '',
-        model: data.model || model,
-        totalDuration: data.total_duration
-    };
-}
-
 /**
  * Classifies a prompt into 'light' (can offload to local Ollama) vs 'heavy' (needs full AGY workspace tools).
  */
@@ -611,78 +572,6 @@ function classifyTask(prompt) {
 
     // Default to heavy (safe bet: route to AGY agent)
     return 'heavy';
-}
-
-// Configurable and default refusal keywords/patterns for local Ollama fallback to AGY
-const OLLAMA_FALLBACK_KEYWORDS = (process.env.OLLAMA_FALLBACK_KEYWORDS || '')
-    .split(',')
-    .map(s => s.trim().toLowerCase())
-    .filter(Boolean);
-
-const DEFAULT_REFUSAL_STRINGS = [
-    "i'm sorry, but i can't help with that request",
-    "i'm sorry, but i cannot help with that request",
-    "i am sorry, but i cannot help with that request",
-    "i apologize, but i can't help with that request",
-    "i apologize, but i cannot help with that request",
-    "i cannot fulfill this request",
-    "i'm unable to fulfill this request",
-    "i am unable to fulfill this request",
-    "i cannot assist with this request",
-    "i am unable to assist with this request",
-    "i can't assist with this request",
-    "i cannot help with this request",
-    "i can't help with that request"
-];
-
-const DEFAULT_REFUSAL_PATTERNS = [
-    /I(?:'m| am) sorry,?(?: but)? I (?:can't|cannot|am unable to) help with that request/i,
-    /I apologize,?(?: but)? I (?:can't|cannot|am unable to) help with that request/i,
-    /I (?:cannot|can't|am unable to) (?:fulfill|complete|process|assist with) this request/i,
-    /I (?:cannot|can't|am unable to) help with (?:that|this) (?:request|task|question)/i,
-    /I(?:'m| am) sorry,?(?: but)? I (?:cannot|can't|am unable to) (?:assist|help|fulfill|do that)/i,
-    /I apologize,?(?: but)? I (?:cannot|can't|am unable to) (?:assist|help|fulfill|do that)/i,
-    /As an AI(?: language model)?, I (?:cannot|can't|am unable to|do not have|don't have)/i,
-    /As a language model, I (?:cannot|can't|am unable to|do not have|don't have)/i,
-    /I (?:don't|do not) have access to (?:your |the )?(?:workspace|filesystem|system|tools|real-time|files)/i,
-    /I (?:don't|do not) have (?:the )?(?:ability|tools|capability|permissions) to/i,
-    /I (?:cannot|can't) (?:access|view|edit|modify|run) (?:files|directories|commands|scripts|tools) in (?:your|the) (?:workspace|system|environment)/i,
-    /I (?:do not|don't) have (?:real-time|current|up-to-date) (?:information|access|data)/i
-];
-
-function isOllamaRefusal(text, customKeywords = []) {
-    if (!text || !text.trim()) {
-        return { isRefusal: true, reason: 'Empty response', matched: 'empty response' };
-    }
-
-    const clean = text.trim();
-    const lower = clean.toLowerCase();
-
-    // Check custom strings from environment or options
-    const allCustom = [...OLLAMA_FALLBACK_KEYWORDS, ...customKeywords];
-    for (const kw of allCustom) {
-        if (kw && lower.includes(kw.toLowerCase().trim())) {
-            return { isRefusal: true, reason: 'Custom keyword match', matched: kw };
-        }
-    }
-
-    // Check literal refusal strings
-    for (const phrase of DEFAULT_REFUSAL_STRINGS) {
-        if (lower.includes(phrase)) {
-            return { isRefusal: true, reason: 'Refusal phrase', matched: phrase };
-        }
-    }
-
-    // Check regex patterns against first 600 chars where refusals typically manifest
-    const sample = clean.substring(0, 600);
-    for (const pattern of DEFAULT_REFUSAL_PATTERNS) {
-        const m = sample.match(pattern);
-        if (m) {
-            return { isRefusal: true, reason: 'Refusal pattern match', matched: m[0] };
-        }
-    }
-
-    return { isRefusal: false };
 }
 
 async function executeOllamaMessage(roomId, tmid, promptText, customModel = null, fallbackToAgy = null, onComplete = null) {
@@ -1037,12 +926,31 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null, ex
 
             // Post-turn Git Auto-commit & push back to Gitea
             const targetCwd = repoDir || '/workspace';
-            const postSync = syncPostTurn(targetCwd, { threadName: activeThreadName });
-            if (postSync.committed && postSync.pushed) {
-                finalOutput += `\n\n*(🚀 Auto-committed & pushed to Gitea: \`${postSync.commitHash}\` on \`${postSync.branch}\`)*`;
+            const postSync = await syncPostTurn(targetCwd, {
+                threadName: activeThreadName,
+                promptText: messageText
+            });
+
+            if (postSync.secretDetected) {
+                finalOutput += `\n\n*(🛡️ **Git Auto-Commit Blocked:** Potential secret detected: \`${postSync.secretReason}\`. Files remain uncommitted.)*`;
+            } else if (postSync.committed && postSync.pushed) {
+                const commitSummary = postSync.commitMessage ? ` — "${postSync.commitMessage}"` : '';
+                finalOutput += `\n\n*(🚀 Auto-committed & pushed to Gitea: \`${postSync.commitHash}\` on \`${postSync.branch}\`${commitSummary})*`;
             } else if (postSync.committed && !postSync.pushed) {
                 finalOutput += `\n\n*(⚠️ Committed \`${postSync.commitHash}\` locally, but push to Gitea failed: ${postSync.pushError})*`;
             }
+
+            // Post-turn Background Lesson Distillation via Local Ollama
+            autoDistillAndSaveLesson(messageText, finalOutput, {
+                workspaceDir: targetCwd,
+                threadName: activeThreadName
+            }).then(memRes => {
+                if (memRes && memRes.distilled) {
+                    console.log(`[Rocket-Grav] Memory distilled into AGENTS.md for ${activeThreadName}: "${memRes.lesson}"`);
+                }
+            }).catch(memErr => {
+                console.warn(`[Rocket-Grav] Background memory distillation error: ${memErr.message}`);
+            });
 
             if (preFlightNotice) {
                 finalOutput = preFlightNotice + finalOutput;
@@ -1607,12 +1515,15 @@ app.post('/webhook', async (req, res) => {
         const activeThread = getThreads().active_thread || 'default';
         const repoDir = getThreadRepoDir(activeThread);
         const thinkingMsgId = await postMessage(roomId, tmid, `\`⠋\` *Committing and pushing changes in \`${path.basename(repoDir)}\` to Gitea...*`);
-        const res = syncPostTurn(repoDir, { threadName: activeThread });
+        const res = await syncPostTurn(repoDir, { threadName: activeThread, promptText: 'Manual push from chat' });
         let reply = '';
         if (!res.isGit) {
             reply = `ℹ️ Directory \`${path.basename(repoDir)}\` for thread \`${activeThread}\` is not a Git repository.`;
+        } else if (res.secretDetected) {
+            reply = `[🛡️] **Git push blocked by security scanner:** Potential secret detected: \`${res.secretReason}\`.\nFiles were unstaged for safety.`;
         } else if (res.committed && res.pushed) {
-            reply = `[✓] **Committed & Pushed to Gitea:** \`${res.commitHash}\` on \`${res.branch}\` (${res.changedFilesCount} files).`;
+            const commitSummary = res.commitMessage ? ` — "${res.commitMessage}"` : '';
+            reply = `[✓] **Committed & Pushed to Gitea:** \`${res.commitHash}\` on \`${res.branch}\` (${res.changedFilesCount} files)${commitSummary}`;
         } else if (res.committed && !res.pushed) {
             reply = `[⚠️] **Committed locally (\`${res.commitHash}\`), but push failed:** ${res.pushError}`;
         } else {
@@ -1852,6 +1763,7 @@ app.post('/webhook', async (req, res) => {
         const newModel = messageText.split(' ').slice(2).join(' ').trim();
         if (newModel) {
             ollamaModel = newModel;
+            setOllamaModel(newModel);
             await postMessage(roomId, tmid, `[✓] Switched active Ollama model to: **\`${ollamaModel}\`**`);
         } else {
             await postMessage(roomId, tmid, `Please provide a model name, e.g. \`!agy ollama switch phi4-mini:latest\``);
@@ -2051,11 +1963,18 @@ app.post('/repos/bind', (req, res) => {
     res.json(result);
 });
 
-app.post('/repos/sync', (req, res) => {
+app.post('/repos/sync', async (req, res) => {
     const thread = (req.body && req.body.thread) || getThreads().active_thread;
     const repoDir = getThreadRepoDir(thread);
-    const result = syncPreFlight(repoDir);
-    res.json(result);
+    const action = (req.body && req.body.action) || 'pull';
+    try {
+        const result = action === 'push'
+            ? await syncPostTurn(repoDir, { threadName: thread, promptText: req.body.prompt || 'REST sync push' })
+            : syncPreFlight(repoDir);
+        res.json(result);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.post('/update', async (req, res) => {

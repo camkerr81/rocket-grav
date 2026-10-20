@@ -314,11 +314,82 @@ function removeMemory(targetKeyword, options = {}) {
     }
 }
 
+/**
+ * Asynchronously reviews an AGY turn (prompt + final output + git diff summary)
+ * using local Ollama to distill lessons learned, constraints, or bug patterns
+ * and appends them to AGENTS.md.
+ */
+async function autoDistillAndSaveLesson(promptText, finalOutput, options = {}) {
+    if (!promptText || !promptText.trim()) {
+        return { distilled: false, reason: 'Empty prompt' };
+    }
+
+    const { queryOllama } = require('./ollama');
+    const repoDir = options.workspaceDir || options.repoDir;
+    const threadName = options.threadName || 'default';
+
+    let diffSummary = '';
+    if (repoDir && fs.existsSync(path.join(repoDir, '.git'))) {
+        try {
+            const { execSync } = require('child_process');
+            diffSummary = execSync('git log -1 --stat', { cwd: repoDir, timeout: 5000, stdio: 'pipe' }).toString().trim();
+        } catch (_) {}
+    }
+
+    const promptExcerpt = promptText.trim().substring(0, 1000);
+    const outputExcerpt = (finalOutput || '').trim().substring(0, 1500);
+
+    const userContent = [
+        `User Prompt: ${promptExcerpt}`,
+        outputExcerpt ? `Agent Action/Output: ${outputExcerpt}` : null,
+        diffSummary ? `Recent Git Changes: ${diffSummary.substring(0, 800)}` : null
+    ].filter(Boolean).join('\n\n');
+
+    const systemPrompt = "You are an automated lesson extraction assistant. Review this pair-programming turn. " +
+        "Determine if there is a persistent technical rule, architectural constraint, bug fix pattern, or user preference that should be remembered for future turns in this project. " +
+        "If NO permanent lesson is needed (e.g. simple explanation, trivial change, routine chat, question answering, normal code lookup), respond ONLY with 'NONE'. " +
+        "If YES, respond with a single concise, actionable bullet point (max 25 words). Do not include quotes, greetings, or prefixes like 'Lesson:'.";
+
+    try {
+        const result = await queryOllama(userContent, {
+            system: systemPrompt,
+            timeoutMs: 15000
+        });
+
+        const reply = (result.text || '').trim();
+        if (!reply || reply.toUpperCase() === 'NONE' || reply.toUpperCase().startsWith('NONE.')) {
+            return { distilled: false, reason: 'No new lesson needed' };
+        }
+
+        const cleanedLesson = reply.replace(/^[\*\-\s"']+|["'\s]+$/g, '').trim();
+        if (!cleanedLesson || cleanedLesson.length < 8) {
+            return { distilled: false, reason: 'Lesson too short or empty' };
+        }
+
+        const saveRes = addMemory(cleanedLesson, {
+            workspaceDir: repoDir,
+            threadName
+        });
+
+        console.log(`[Memory] Auto-distilled lesson for thread "${threadName}": "${cleanedLesson}"`);
+        return {
+            distilled: true,
+            lesson: cleanedLesson,
+            entry: saveRes.entry,
+            targetFile: saveRes.targetFile
+        };
+    } catch (e) {
+        console.warn(`[Memory] Background lesson distillation skipped: ${e.message}`);
+        return { distilled: false, error: e.message };
+    }
+}
+
 module.exports = {
     getWorkspaceAgentsMdPath,
     getGlobalRulesPath,
     addMemory,
     getMemories,
     formatMemoryList,
-    removeMemory
+    removeMemory,
+    autoDistillAndSaveLesson
 };

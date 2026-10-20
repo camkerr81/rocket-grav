@@ -323,6 +323,14 @@ Rocket-Grav provides seamless cross-device workflow handoff. When you commit and
 | `POST /repos/bind` | REST Endpoint | Dynamically binds a thread to a repository via HTTP. | `curl -X POST http://localhost:8080/repos/bind -d '{"thread":"default","repo":"rocket-grav"}'` |
 | `POST /repos/sync` | REST Endpoint | Triggers manual pre-flight pull or post-turn push via HTTP. | `curl -X POST http://localhost:8080/repos/sync -d '{"action":"pull"}'` |
 
+### 10. Local Model Handoff & Pipeline Automation
+
+Rocket-Grav bridges the high-reasoning autonomous power of the Google Antigravity CLI with zero-token-cost local Ollama compute running on your LAN:
+
+* • **Post-Turn Background Memory Extractor (Zero-Token Lessons):** When AGY completes a prompt turn, Rocket-Grav asynchronously passes the user prompt, git changes, and agent output to local Ollama. If a bug fix, architectural guideline, or pattern correction was made, Ollama distills a concise, actionable bullet and writes it directly to the repository's `AGENTS.md` without consuming cloud AGY tokens or slowing down chat responses.
+* • **Pre-Commit Secret & Credential Scanner:** Before pushing code to Gitea, staged diffs are screened by fast heuristic patterns and local Ollama for accidentally exposed private keys, OAuth tokens, passwords, or API credentials. If a leak is detected, auto-commit is safely aborted, files are unstaged, and an alert is posted to chat.
+* • **AI Conventional Commit Message Generator:** Instead of generic commit messages, local Ollama analyzes `git diff --cached --stat` and the user's prompt to draft semantic, concise conventional commit messages (e.g. `fix(auth): handle expired jwt refresh token`) in under 150ms.
+
 ---
 
 ## ⡷⠆ Docker Setup & Installation
