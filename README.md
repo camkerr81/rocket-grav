@@ -36,7 +36,7 @@ By bridging chat platforms directly to a containerized Antigravity CLI runtime:
 
 ---
 
-## ▶ Overview
+## ⡷⠆ Overview
 
 **Rocket-Grav** is a lightweight, modular gateway service connecting chat webhooks to Google's **Antigravity CLI** (`agy`). It provides an autonomous coding agent (`MangoBot`) accessible from any designated channel or thread.
 
@@ -55,7 +55,7 @@ By bridging chat platforms directly to a containerized Antigravity CLI runtime:
 
 ---
 
-## ▶ Architectural Flow
+## ⡷⠆ Architectural Flow
 
 Rocket-Grav uses a decoupled three-tier architecture: the **Chat Adapter Layer**, the **Core Bridge Engine**, and the **Antigravity Runtime**.
 
@@ -120,7 +120,7 @@ sequenceDiagram
 
 ---
 
-## ▶ Modular Provider Architecture
+## ⡷⠆ Modular Provider Architecture
 
 All chat integrations inherit from the base adapter interface located in `adapters/BaseAdapter.js`:
 
@@ -150,7 +150,7 @@ CHAT_PROVIDER=rocketchat     # Options: rocketchat | mattermost | slack
 
 ---
 
-## ▶ Usage Switches & Commands
+## ⡷⠆ Usage Switches & Commands
 
 All commands can be invoked using the `!agy` prefix or `@agy` bot mention.
 
@@ -278,6 +278,24 @@ Rocket-Grav includes a bundled Model Context Protocol (MCP) server located in `m
 | `!agy version` | Chat Command | Displays installed Antigravity CLI version, latest upstream release, and auto-update status. |
 | `!agy update` / `!agy upgrade` | Chat Command | Triggers an immediate check and in-place upgrade of the Antigravity CLI. |
 | `!agy log` / `!agy logs` | Chat Command | Tails the last 25 lines of the active thread's `transcript.jsonl`. |
+| `!agy context` / `!context` | Chat Command | Visualizes context window token usage and progress bar against the 256k limit. |
+| `!agy memory` / `!agy lessons` | Chat Command | Displays recorded project (`AGENTS.md`) and global (`rules/`) lessons learned. |
+| `!agy remember <lesson>` | Chat Command | Appends a persistent lesson to the active project's `AGENTS.md`. |
+| `!agy remember global <lesson>` | Chat Command | Appends a system-wide guideline across all projects. |
+
+### 8. FIFO Message Queue & Concurrency Control
+
+When multiple prompt requests are sent in rapid succession, Rocket-Grav enqueues them in a strict First-In, First-Out (FIFO) queue. Each request waits for the preceding task to complete before executing, preventing workspace file collisions, SQLite database locks, and conversation race conditions.
+
+| Command / Endpoint | Type | Description | Example |
+|---|---|---|---|
+| `!agy queue` | Chat Command | Displays currently executing task and all pending queued requests. | `!agy queue` |
+| `!agy cancel` / `!agy abort` | Chat Command | Terminates the active running process and advances to next queued item. | `!agy cancel` |
+| `!agy clear queue` | Chat Command | Clears all pending requests from the queue without killing the running task. | `!agy clear queue` |
+| `!agy cancel all` | Chat Command | Kills the currently executing task and empties the entire pending queue. | `!agy cancel all` |
+| `GET /queue` | REST Endpoint | Returns JSON payload with active job status, queued items, and rendered Markdown. | `curl http://localhost:8080/queue` |
+| `POST /queue/clear` | REST Endpoint | Flushes pending queue items via HTTP. | `curl -X POST http://localhost:8080/queue/clear` |
+| `POST /queue/cancel` | REST Endpoint | Aborts the active process via HTTP. | `curl -X POST http://localhost:8080/queue/cancel` |
 | `GET /version` | REST API | Returns JSON payload with installed/latest version and auto-update metadata. |
 | `POST /update` | REST API | Triggers on-demand Antigravity CLI update via HTTP. |
 | `POST /webhook` | REST API | Inbound webhook endpoint for chat platforms or external automation scripts. |
@@ -285,7 +303,7 @@ Rocket-Grav includes a bundled Model Context Protocol (MCP) server located in `m
 
 ---
 
-## ▶ Docker Setup & Installation
+## ⡷⠆ Docker Setup & Installation
 
 ### 1. Prerequisites
 
@@ -339,7 +357,7 @@ Configure your `.env` file according to your selected provider:
 
 ---
 
-## ▶ Step-by-Step Walkthrough
+## ⡷⠆ Step-by-Step Walkthrough
 
 ### Step 1: Clone the Repository
 
@@ -390,7 +408,7 @@ docker exec -it rocketchat-agy-bridge agy
 
 ---
 
-## ▶ Repository Structure
+## ⡷⠆ Repository Structure
 
 ```text
 rocket-grav/
@@ -415,7 +433,7 @@ rocket-grav/
 
 ---
 
-## ▶ License
+## ⡷⠆ License
 
 Internal project for autonomous development workflows with chat integrations and Google Antigravity.
 All rights reserved.

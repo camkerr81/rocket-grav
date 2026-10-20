@@ -73,6 +73,8 @@ const {
     removeMemory
 } = require('./memory');
 
+const { queueManager } = require('./queue');
+
 const { getAdapter } = require('./adapters');
 const adapter = getAdapter();
 console.log(`[Rocket-Grav] Initialized with chat adapter: ${adapter.name.toUpperCase()}`);
@@ -673,7 +675,7 @@ function isOllamaRefusal(text, customKeywords = []) {
     return { isRefusal: false };
 }
 
-async function executeOllamaMessage(roomId, tmid, promptText, customModel = null, fallbackToAgy = null) {
+async function executeOllamaMessage(roomId, tmid, promptText, customModel = null, fallbackToAgy = null, onComplete = null) {
     const targetModel = customModel || ollamaModel;
     const thinkingMsgId = await postMessage(roomId, tmid, `\`⠋\` *Offloading to local Ollama (${targetModel})...*`);
     const startTime = Date.now();
@@ -713,6 +715,7 @@ async function executeOllamaMessage(roomId, tmid, promptText, customModel = null
         } else {
             await postMessage(roomId, tmid, reply, attachments.length > 0 ? attachments : null);
         }
+        if (typeof onComplete === 'function') onComplete();
     } catch (err) {
         console.error(`[Rocket-Grav] Ollama error: ${err.message}`);
         if (fallbackToAgy) {
@@ -728,6 +731,7 @@ async function executeOllamaMessage(roomId, tmid, promptText, customModel = null
             } else {
                 await postMessage(roomId, tmid, errReply);
             }
+            if (typeof onComplete === 'function') onComplete();
         }
     }
 }
@@ -796,7 +800,7 @@ async function refinePromptWithOllama(promptText, model = null) {
     }
 }
 
-async function runAgySession(roomId, tmid, messageText, existingMsgId = null, extraContext = null) {
+async function runAgySession(roomId, tmid, messageText, existingMsgId = null, extraContext = null, onComplete = null) {
     // Post the placeholder spinner message if not already existing
     let thinkingMsgId = existingMsgId;
     if (!thinkingMsgId) {
@@ -859,6 +863,7 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null, ex
         console.log(`Executing (Attempt ${attempt}/3): agy ${commandArgs.join(' ')}`);
         const child = spawn('agy', commandArgs, { cwd: '/workspace', shell: false });
         if (convId) activeProcesses[convId] = child;
+        queueManager.attachProcess(child);
         
         let finalResultObj = null;
         let rawOutput = '';
@@ -945,6 +950,9 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null, ex
             } else {
                 await postMessage(roomId, tmid, `❌ **Antigravity CLI Process Spawn Error**\n${error.message}`, attachments);
             }
+            if (typeof onComplete === 'function') {
+                onComplete();
+            }
         });
 
         child.on('close', async (code) => {
@@ -1021,10 +1029,106 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null, ex
             } else {
                 await postMessage(roomId, tmid, finalOutput, attachments.length > 0 ? attachments : null);
             }
+
+            if (typeof onComplete === 'function') {
+                onComplete();
+            }
         });
     };
 
     executeAgy(1);
+}
+
+/**
+ * Processes the next job in the FIFO queue if one exists and the queue is not busy.
+ */
+async function processNextQueueJob() {
+    if (queueManager.isBusy()) return;
+    const nextJob = queueManager.dequeue();
+    if (!nextJob) return;
+
+    console.log(`[Queue] Dequeued next job: ${nextJob.id} ("${nextJob.messageText.substring(0, 40)}...") (${queueManager.getQueue().length} remaining in queue)`);
+
+    // If nextJob has a queuedMsgId, update that message to show it is now executing!
+    if (nextJob.queuedMsgId) {
+        const remaining = queueManager.getQueue().length;
+        const remainingStr = remaining > 0 ? ` (${remaining} remaining in queue)` : '';
+        await updateMessage(nextJob.roomId, nextJob.queuedMsgId, `\`⠋\` *Starting queued prompt${remainingStr}...*`);
+        nextJob.existingMsgId = nextJob.queuedMsgId;
+    }
+
+    executePromptJob(nextJob);
+}
+
+/**
+ * Executes a single prompt job through the router (Ollama or AGY CLI).
+ */
+async function executePromptJob(job) {
+    queueManager.setActiveJob(job);
+    const {
+        roomId,
+        tmid,
+        messageText,
+        forceAgy,
+        refinedContext,
+        isOllamaDirect,
+        ollamaPrompt,
+        threadName,
+        existingMsgId
+    } = job;
+
+    if (threadName) {
+        const currentData = getThreads();
+        if (currentData.active_thread !== threadName) {
+            setActiveThread(threadName);
+        }
+    }
+
+    let jobCompleted = false;
+    const onComplete = () => {
+        if (jobCompleted) return;
+        jobCompleted = true;
+        queueManager.clearActiveJob();
+        processNextQueueJob();
+    };
+
+    try {
+        if (isOllamaDirect) {
+            console.log(`[Rocket-Grav] Executing direct Ollama prompt from job ${job.id}`);
+            await executeOllamaMessage(roomId, tmid, ollamaPrompt, null, null, onComplete);
+            return;
+        }
+
+        // Routing decision
+        let useOllama = false;
+        if (!forceAgy && !refinedContext) {
+            if (bridgeMode === 'ollama') {
+                useOllama = true;
+            } else if (bridgeMode === 'hybrid') {
+                const taskType = classifyTask(messageText);
+                console.log(`[Rocket-Grav] Task classification for "${messageText.substring(0, 50)}...": ${taskType.toUpperCase()}`);
+                if (taskType === 'light') {
+                    useOllama = true;
+                }
+            }
+        }
+
+        if (useOllama) {
+            console.log(`[Rocket-Grav] Offloading to local Ollama (${ollamaModel})`);
+            await executeOllamaMessage(roomId, tmid, messageText, null, (fallbackThinkingMsgId) => {
+                // Fallback to AGY if Ollama fails
+                runAgySession(roomId, tmid, messageText, fallbackThinkingMsgId, null, onComplete);
+            }, onComplete);
+            return;
+        }
+
+        // Route to full Antigravity CLI session
+        runAgySession(roomId, tmid, messageText, existingMsgId, refinedContext, onComplete);
+    } catch (err) {
+        console.error(`[Queue] Error executing job ${job.id}:`, err);
+        await postMessage(roomId, tmid, `❌ **Job Execution Error**: ${err.message}`);
+        onComplete();
+    }
 }
 
 // Middleware to filter requests by IP
@@ -1113,6 +1217,10 @@ app.post('/webhook', async (req, res) => {
 *   \`!agy remember global <lesson>\` - Save a system-wide lesson across all projects (rules/)
 *   \`!agy memory\` (or \`lessons\`) - View current project and global lessons learned
 *   \`!agy forget <keyword>\` - Remove a saved lesson matching keyword
+*   \`!agy queue\` - Show active task and FIFO queue of pending prompts
+*   \`!agy cancel\` (or \`abort\`) - Cancel the currently running task
+*   \`!agy clear queue\` - Clear all pending prompts from the queue
+*   \`!agy cancel all\` - Cancel active task and clear the entire queue
 *   \`!agy issues\` (or \`beads\`) - List all open beads issues
 *   \`!agy version\` - Show installed Antigravity CLI version and update status
 *   \`!agy update\` (or \`upgrade\`) - Manually check and update Antigravity CLI to latest version
@@ -1339,6 +1447,58 @@ app.post('/webhook', async (req, res) => {
                 await postMessage(roomId, tmid, `[✗] No memories found matching "${keyword}" in project or global rules.`);
             }
         }
+        return;
+    }
+
+    // FIFO Queue Management Commands
+    if (lowerMessage === 'queue' || lowerMessage === 'agy queue' || lowerMessage === 'list queue' || lowerMessage === 'show queue') {
+        const reply = queueManager.formatQueueStatus();
+        await postMessage(roomId, tmid, reply);
+        return;
+    }
+
+    if (
+        lowerMessage === 'cancel all' ||
+        lowerMessage === 'agy cancel all' ||
+        lowerMessage === 'abort all' ||
+        lowerMessage === 'agy abort all' ||
+        lowerMessage === 'clear all'
+    ) {
+        const cleared = queueManager.clearQueue();
+        const cancelResult = queueManager.cancelActive();
+        let reply = `[✓] **Cancelled all operations:**\n`;
+        if (cancelResult.success) {
+            reply += `• Active task cancelled: "${cancelResult.job.messageText.substring(0, 40)}..."\n`;
+        } else {
+            reply += `• No active task was running.\n`;
+        }
+        reply += `• Cleared **${cleared.count}** pending job(s) from the queue.`;
+        await postMessage(roomId, tmid, reply);
+        return;
+    }
+
+    if (
+        lowerMessage === 'clear queue' ||
+        lowerMessage === 'queue clear' ||
+        lowerMessage === 'agy clear queue' ||
+        lowerMessage === 'agy queue clear' ||
+        lowerMessage === 'empty queue'
+    ) {
+        const cleared = queueManager.clearQueue();
+        await postMessage(roomId, tmid, `[✓] **Queue Cleared:** Removed **${cleared.count}** pending job(s) from the queue.`);
+        return;
+    }
+
+    if (
+        lowerMessage === 'cancel' ||
+        lowerMessage === 'abort' ||
+        lowerMessage === 'agy cancel' ||
+        lowerMessage === 'agy abort' ||
+        lowerMessage === 'stop' ||
+        lowerMessage === 'agy stop'
+    ) {
+        const cancelResult = queueManager.cancelActive();
+        await postMessage(roomId, tmid, cancelResult.message);
         return;
     }
 
@@ -1627,41 +1787,45 @@ app.post('/webhook', async (req, res) => {
     }
 
     // Explicit direct Ollama prompt (e.g. "!agy ollama <prompt>" or "!agy ask <prompt>")
-    if (messageText.toLowerCase().startsWith('ollama ') || messageText.toLowerCase().startsWith('ask ')) {
-        const ollamaPrompt = messageText.replace(/^(?:ollama|ask)\s+/i, '').trim();
+    const isOllamaDirect = messageText.toLowerCase().startsWith('ollama ') || messageText.toLowerCase().startsWith('ask ');
+    let ollamaPrompt = null;
+    if (isOllamaDirect) {
+        ollamaPrompt = messageText.replace(/^(?:ollama|ask)\s+/i, '').trim();
         if (!ollamaPrompt) {
             await postMessage(roomId, tmid, "Please provide a prompt for Ollama.");
             return;
         }
-        await executeOllamaMessage(roomId, tmid, ollamaPrompt);
+    }
+
+    const activeThreadName = getThreads().active_thread || 'default';
+    const jobData = {
+        roomId,
+        tmid,
+        messageText,
+        forceAgy,
+        shouldRefine,
+        refinedContext,
+        isOllamaDirect,
+        ollamaPrompt,
+        threadName: activeThreadName
+    };
+
+    if (queueManager.isBusy()) {
+        const queuePosition = queueManager.enqueue(jobData);
+        const preview = isOllamaDirect ? ollamaPrompt : messageText;
+        const cleanPreview = preview.length > 70 ? preview.substring(0, 67) + '...' : preview;
+        const queueMsg = `⏳ **Queued (#${queuePosition} in queue):** "${cleanPreview}"\n*(Thread: \`${activeThreadName}\` • Waiting for active task to complete...)*`;
+        const queuedMsgId = await postMessage(roomId, tmid, queueMsg);
+        queueManager.updateJobMsgId(queuePosition - 1, queuedMsgId);
         return;
     }
 
-    // Routing decision
-    let useOllama = false;
-    if (!forceAgy && !shouldRefine) {
-        if (bridgeMode === 'ollama') {
-            useOllama = true;
-        } else if (bridgeMode === 'hybrid') {
-            const taskType = classifyTask(messageText);
-            console.log(`[Rocket-Grav] Task classification for "${messageText.substring(0, 50)}...": ${taskType.toUpperCase()}`);
-            if (taskType === 'light') {
-                useOllama = true;
-            }
-        }
-    }
-
-    if (useOllama) {
-        console.log(`[Rocket-Grav] Offloading to local Ollama (${ollamaModel})`);
-        await executeOllamaMessage(roomId, tmid, messageText, null, (existingMsgId) => {
-            // Fallback to AGY if Ollama fails
-            runAgySession(roomId, tmid, messageText, existingMsgId);
-        });
-        return;
-    }
-
-    // Route to full Antigravity CLI session
-    runAgySession(roomId, tmid, messageText, refineThinkingMsgId, refinedContext);
+    // Queue is idle: execute immediately
+    executePromptJob({
+        id: `job_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        ...jobData,
+        existingMsgId: refineThinkingMsgId || null
+    });
 });
 
 app.get('/version', async (req, res) => {
@@ -1728,6 +1892,25 @@ app.post('/memory', (req, res) => {
     const { lesson, global: isGlobal, thread } = req.body || {};
     const result = addMemory(lesson, { isGlobal, threadName: thread });
     res.status(result.success ? 200 : 400).json(result);
+});
+
+app.get('/queue', (req, res) => {
+    res.json({
+        isBusy: queueManager.isBusy(),
+        activeJob: queueManager.getActiveJob(),
+        queue: queueManager.getQueue(),
+        rendered: queueManager.formatQueueStatus()
+    });
+});
+
+app.post('/queue/clear', (req, res) => {
+    const result = queueManager.clearQueue();
+    res.json({ success: true, cleared: result.count });
+});
+
+app.post('/queue/cancel', (req, res) => {
+    const result = queueManager.cancelActive();
+    res.json(result);
 });
 
 app.post('/update', async (req, res) => {
