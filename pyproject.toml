@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "braille-iconography"
+version = "1.0.0"
+description = "Tactile monospace Braille icon standard, Python CLI, and emoji replacement engine"
+readme = "README.md"
+authors = [{ name = "Cameron Kerr", email = "camkerr81@gmail.com" }]
+license = { text = "MIT" }
+keywords = ["braille", "icons", "typography", "cli", "emoji", "monospace", "tui"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Text Processing :: Markup",
+    "Topic :: Software Development :: User Interfaces",
+]
+requires-python = ">=3.8"
+dependencies = []
+
+[project.scripts]
+braille-icon = "braille_icon.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["braille_icon*"]

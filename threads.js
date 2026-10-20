@@ -319,7 +319,7 @@ function resolveSwitchTarget(targetStr, customPath = null) {
             stepCount: conv.step_count || 0,
             lastModified: conv.last_modified_time,
             type: 'index',
-            message: `[✓] **Switched to conversation #${idx}:** "${convTitle}"\n*   **Thread:** \`${boundThreadName}\`\n*   **UUID:** \`${targetConvId}\`\n*   **Turns/Steps:** ${conv.step_count || 0} (${formatRelativeTime(conv.last_modified_time)})\n\n*All subsequent prompts will continue this conversation.*`
+            message: `[⢄⠎] **Switched to conversation #${idx}:** "${convTitle}"\n*   **Thread:** \`${boundThreadName}\`\n*   **UUID:** \`${targetConvId}\`\n*   **Turns/Steps:** ${conv.step_count || 0} (${formatRelativeTime(conv.last_modified_time)})\n\n*All subsequent prompts will continue this conversation.*`
         };
     }
 
@@ -352,7 +352,7 @@ function resolveSwitchTarget(targetStr, customPath = null) {
             title: convTitle,
             stepCount: convSummary ? convSummary.step_count : 0,
             type: 'uuid',
-            message: `[✓] **Switched to conversation:** \`${targetConvId}\`${titleText}${stepsText}\n*   **Active Thread:** \`${boundThreadName}\`\n\n*All subsequent prompts will continue this conversation.*`
+            message: `[⢄⠎] **Switched to conversation:** \`${targetConvId}\`${titleText}${stepsText}\n*   **Active Thread:** \`${boundThreadName}\`\n\n*All subsequent prompts will continue this conversation.*`
         };
     }
 
@@ -384,7 +384,7 @@ function resolveSwitchTarget(targetStr, customPath = null) {
             threadName: matchedName,
             convId,
             type: 'thread',
-            message: `[✓] **Switched to thread:** \`${matchedName}\`${convDetails}`
+            message: `[⢄⠎] **Switched to thread:** \`${matchedName}\`${convDetails}`
         };
     }
 
@@ -402,7 +402,7 @@ function resolveSwitchTarget(targetStr, customPath = null) {
         convId: null,
         isNew: true,
         type: 'new_thread',
-        message: `[✓] **Created and switched to new thread:** \`${sanitizedName}\`\n*(A new conversation will be started on your next prompt)*`
+        message: `[⢄⠎] **Created and switched to new thread:** \`${sanitizedName}\`\n*(A new conversation will be started on your next prompt)*`
     };
 }
 
@@ -437,7 +437,7 @@ function formatConversationList(limit = 15, customPath = null) {
         let threadTag = '';
         if (boundThread) {
             const isActive = (boundThread === activeThread);
-            threadTag = isActive ? ` • 🏷️ \`${boundThread}\` ★ *(Active)*` : ` • 🏷️ \`${boundThread}\``;
+            threadTag = isActive ? ` • ⠊⢵ \`${boundThread}\` ★ *(Active)*` : ` • ⠊⢵ \`${boundThread}\``;
         }
 
         const shortId = conv.conversation_id.substring(0, 8) + '...';
@@ -574,7 +574,7 @@ function formatContextUsage(customPath = null) {
 
     if (!convId) {
         return {
-            reply: `ℹ️ Active thread \`${activeThread}\` has no active conversation yet. Send a prompt to start one!`
+            reply: `⢨⡅ Active thread \`${activeThread}\` has no active conversation yet. Send a prompt to start one!`
         };
     }
 
@@ -587,7 +587,7 @@ function formatContextUsage(customPath = null) {
     const logPath = candidateLogPaths.find(p => fs.existsSync(p));
     if (!logPath) {
         return {
-            reply: `ℹ️ Log file not found for conversation \`${convId}\`. Have you sent a prompt in thread \`${activeThread}\` yet?`
+            reply: `⢨⡅ Log file not found for conversation \`${convId}\`. Have you sent a prompt in thread \`${activeThread}\` yet?`
         };
     }
 
@@ -616,7 +616,7 @@ function formatContextUsage(customPath = null) {
 
         if (!latestTokens) {
             return {
-                reply: `ℹ️ No token usage telemetry recorded for conversation \`${convId}\` yet.`
+                reply: `⢨⡅ No token usage telemetry recorded for conversation \`${convId}\` yet.`
             };
         }
 
@@ -631,22 +631,22 @@ function formatContextUsage(customPath = null) {
         const progressBar = '█'.repeat(filled) + '░'.repeat(20 - filled);
         const remaining = Math.max(0, maxLimit - totalActive);
 
-        let statusText = '🟢 Context Healthy (Well within limits)';
+        let statusText = '⢄⠎ Context Healthy (Well within limits)';
         if (pctNum >= 90) {
-            statusText = '🔴 Context Critical (Approaching automatic compaction threshold)';
+            statusText = '⡱⢎ Context Critical (Approaching automatic compaction threshold)';
         } else if (pctNum >= 75) {
-            statusText = '🟡 Context Elevated (Consider /compact if starting major new refactor)';
+            statusText = '⠕⠪ Context Elevated (Consider /compact if starting major new refactor)';
         }
 
-        let reply = `📊 **Context Window Usage** (\`${activeThread}\`)\n`;
+        let reply = `⡞⣗ **Context Window Usage** (\`${activeThread}\`)\n`;
         reply += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
         reply += `**Usage:** \`${totalActive.toLocaleString()}\` / \`${maxLimit.toLocaleString()}\` tokens (**${pct}%**)\n`;
         reply += `\`[${progressBar}] ${pct}%\`\n\n`;
-        reply += `• ⚡ **Cached History & System:** \`${cached.toLocaleString()}\` tokens (${((cached / (totalActive || 1)) * 100).toFixed(1)}%)\n`;
-        reply += `• 📥 **Current Turn Input:** \`${input.toLocaleString()}\` tokens (${((input / (totalActive || 1)) * 100).toFixed(1)}%)\n`;
-        reply += `• 📤 **Last Turn Output:** \`${output.toLocaleString()}\` tokens\n`;
-        reply += `• 🏷️ **Total Active Context:** \`${totalActive.toLocaleString()}\` tokens\n`;
-        reply += `• 🪟 **Remaining to Compaction:** \`${remaining.toLocaleString()}\` tokens (${((remaining / maxLimit) * 100).toFixed(1)}%)\n\n`;
+        reply += `• ⢴⠃ **Cached History & System:** \`${cached.toLocaleString()}\` tokens (${((cached / (totalActive || 1)) * 100).toFixed(1)}%)\n`;
+        reply += `• ⣚⣗ **Current Turn Input:** \`${input.toLocaleString()}\` tokens (${((input / (totalActive || 1)) * 100).toFixed(1)}%)\n`;
+        reply += `• ⣲⣗ **Last Turn Output:** \`${output.toLocaleString()}\` tokens\n`;
+        reply += `• ⠊⢵ **Total Active Context:** \`${totalActive.toLocaleString()}\` tokens\n`;
+        reply += `• ⣫⣝ **Remaining to Compaction:** \`${remaining.toLocaleString()}\` tokens (${((remaining / maxLimit) * 100).toFixed(1)}%)\n\n`;
         reply += `• **Active Thread:** \`${activeThread}\` (\`${convId.substring(0, 8)}...\`)\n`;
         reply += `• **Step Count:** ${stepCount || raw.length} steps\n`;
         reply += `• **Status:** ${statusText}\n`;
@@ -662,7 +662,7 @@ function formatContextUsage(customPath = null) {
         };
     } catch (err) {
         return {
-            reply: `❌ Failed to read context usage: ${err.message}`
+            reply: `⡱⢎ Failed to read context usage: ${err.message}`
         };
     }
 }

@@ -3,6 +3,7 @@ const path = require('path');
 const os = require('os');
 const { execSync, execFileSync } = require('child_process');
 const { getThreads, saveThreads } = require('./threads');
+const { containsEmoji, replaceEmojis, replaceEmojisInFile } = require('./braille');
 
 const DEFAULT_GITEA_BASE = process.env.GITEA_URL || 'http://192.168.8.177:3000';
 const DEFAULT_GITEA_USER = process.env.GITEA_USER || 'camkerr81';
@@ -161,7 +162,7 @@ function ensureRepoCloned(threadName, repoSlugOrUrl = null, customRoot = null) {
             success: true,
             targetDir,
             alreadyExists: false,
-            message: `[✓] **Cloned repository:** \`${targetSlug}\` into \`${repoName}/\``
+            message: `[⢄⠎] **Cloned repository:** \`${targetSlug}\` into \`${repoName}/\``
         };
     } catch (e) {
         const errOut = e.stderr ? e.stderr.toString() : e.message;
@@ -353,7 +354,7 @@ async function generateAiCommitMessage(diffStat, promptText, options = {}) {
 
     try {
         const { queryOllama } = require('./ollama');
-        const systemPrompt = "You are a git commit assistant. Return ONLY a single-line conventional commit message (format: type(scope): summary under 72 chars, e.g. 'feat(auth): add refresh token handler' or 'fix(api): handle null response'). No markdown, no quotes, no explanation.";
+        const systemPrompt = "You are a git commit assistant. Return ONLY a single-line conventional commit message (format: type(scope): summary under 72 chars, e.g. 'feat(auth): add refresh token handler' or 'fix(api): handle null response'). NEVER use emojis. No markdown, no quotes, no explanation.";
 
         const content = [
             promptText ? `User Prompt: ${promptText.trim().substring(0, 300)}` : null,
@@ -369,7 +370,7 @@ async function generateAiCommitMessage(diffStat, promptText, options = {}) {
 
         const reply = (result.text || '').trim().replace(/^[`"']+|[`"']+$/g, '');
         if (reply && /^(?:feat|fix|chore|refactor|docs|style|test|perf|ci)(?:\([a-zA-Z0-9_\-\.]+\))?:\s+.+/i.test(reply) && reply.length <= 100) {
-            return reply;
+            return replaceEmojis(reply);
         }
     } catch (e) {
         console.warn(`[GitSync] AI commit message generation bypassed: ${e.message}`);
@@ -380,7 +381,7 @@ async function generateAiCommitMessage(diffStat, promptText, options = {}) {
 
 /**
  * Post-turn git synchronization: auto-commits and pushes finished AGY changes.
- * Scans for secrets and generates an AI conventional commit message via local Ollama.
+ * Scans for secrets, enforces zero emojis with Braille icons, and generates AI commit message.
  */
 async function syncPostTurn(repoDir, options = {}) {
     ensureGitConfig();
@@ -404,6 +405,26 @@ async function syncPostTurn(repoDir, options = {}) {
         // 2. Stage all changes
         execSync('git add -A', execOpts);
 
+        // 2b. Zero Emoji Enforcement: Convert any legacy emojis in staged text/code files
+        try {
+            const stagedFiles = execSync('git diff --cached --name-only', execOpts).toString().split('\n').filter(Boolean);
+            for (const relFile of stagedFiles) {
+                const fullPath = path.join(repoDir, relFile);
+                if (fs.existsSync(fullPath)) {
+                    const stat = fs.lstatSync(fullPath);
+                    if (stat.isFile()) {
+                        const res = replaceEmojisInFile(fullPath);
+                        if (res.changed) {
+                            execSync(`git add "${relFile}"`, execOpts);
+                            console.log(`[GitSync] ⣏⣿ Auto-converted legacy emojis to Braille icons in ${relFile}`);
+                        }
+                    }
+                }
+            }
+        } catch (emErr) {
+            console.warn(`[GitSync] Braille emoji enforcement scan skipped: ${emErr.message}`);
+        }
+
         // 3. Scan staged changes for secrets before committing
         let stagedDiff = '';
         let stagedStat = '';
@@ -414,7 +435,7 @@ async function syncPostTurn(repoDir, options = {}) {
 
         const secScan = await scanDiffForSecrets(stagedDiff);
         if (!secScan.safe) {
-            console.warn(`[GitSync] ⚠️ Security alert in ${path.basename(repoDir)}: ${secScan.reason}. Unstaging changes.`);
+            console.warn(`[GitSync] ⣮⣵ Security alert in ${path.basename(repoDir)}: ${secScan.reason}. Unstaging changes.`);
             try {
                 execSync('git reset HEAD', execOpts);
             } catch (_) {}
@@ -495,7 +516,7 @@ function formatRepoStatusList(customRoot = null) {
     const threads = Object.keys(data.threads);
     const repos = data.thread_repos || {};
 
-    let reply = `📦 **Thread Repository & Git Sync Status**\n`;
+    let reply = `⣏⣹ **Thread Repository & Git Sync Status**\n`;
     reply += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
 
     if (threads.length === 0) {
@@ -506,7 +527,7 @@ function formatRepoStatusList(customRoot = null) {
             const mapping = repos[tName] || '(auto-detect)';
             const repoDir = getThreadRepoDir(tName, wsRoot);
             const isGit = fs.existsSync(path.join(repoDir, '.git'));
-            const statusIcon = isGit ? '🟢 Git' : '⚪ Plain';
+            const statusIcon = isGit ? '⢄⠎ Git' : '⠤ Plain';
             const shortDir = path.basename(repoDir);
 
             reply += `**${isActive ? '★ ' : ''}\`${tName}\`** ${isActive ? '*(Active)*' : ''}\n`;

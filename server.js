@@ -394,17 +394,17 @@ function makeCollapsibleAttachment(title, content, lang = null, color = '#6366f1
  * Formats terminal stdout from `bd list` into a clean, universally compatible bullet list.
  */
 function formatBeadsList(stdout) {
-    if (!stdout || !stdout.trim()) return 'ℹ️ No issues found in Beads.';
+    if (!stdout || !stdout.trim()) return '⢨⡅ No issues found in Beads.';
     const lines = stdout.split('\n');
     const issues = [];
     let summaryText = '';
 
     const statusMap = {
-        '○': '⚪ Open',
-        '◐': '🟡 In Progress',
-        '●': '🔴 Blocked',
-        '✓': '🟢 Closed',
-        '❄': '❄️ Deferred'
+        '○': '⠤ Open',
+        '◐': '⠕ In Progress',
+        '●': '⡱ Blocked',
+        '✓': '⢔ Closed',
+        '❄': '⠤ Deferred'
     };
 
     for (const line of lines) {
@@ -424,10 +424,10 @@ function formatBeadsList(stdout) {
     }
 
     if (issues.length === 0) {
-        return `**📋 Beads Issues:**\n\`\`\`text\n${stripAnsi(stdout).trim()}\n\`\`\``;
+        return `**⡞⣗ Beads Issues:**\n\`\`\`text\n${stripAnsi(stdout).trim()}\n\`\`\``;
     }
 
-    let out = `**📋 Current Beads Issues (${issues.length}):**\n\n`;
+    let out = `**⡞⣗ Current Beads Issues (${issues.length}):**\n\n`;
     for (const iss of issues) {
         out += `• ${iss.status} \`${iss.id}\` [${iss.priority}]\n`;
         out += `  └─ ${iss.title}\n\n`;
@@ -457,7 +457,7 @@ function formatTranscriptLog(jsonlRaw) {
             if (type === 'USER_INPUT' || entry.source === 'USER_EXPLICIT') {
                 const text = (entry.content || '').trim();
                 const preview = text.length > 80 ? text.substring(0, 77) + '...' : text;
-                steps.push(`**${idx} 👤 User:** ${preview}`);
+                steps.push(`**${idx} ⡼⢧ User:** ${preview}`);
             } else if (entry.tool_calls && entry.tool_calls.length > 0) {
                 for (const tc of entry.tool_calls) {
                     const name = tc.name || (tc.function && tc.function.name) || 'tool';
@@ -468,27 +468,27 @@ function formatTranscriptLog(jsonlRaw) {
                         else if (tc.args.AbsolutePath) info = `: \`${tc.args.AbsolutePath}\``;
                         else if (tc.args.query) info = `: "${tc.args.query}"`;
                     }
-                    steps.push(`**${idx} 🔧 Tool:** \`${name}\`${info}`);
+                    steps.push(`**${idx} ⠙⢦ Tool:** \`${name}\`${info}`);
                 }
             } else if (type === 'TOOL_RESPONSE') {
                 const text = (entry.content || '').trim();
                 const preview = text.length > 60 ? text.substring(0, 57) + '...' : text;
-                steps.push(`**${idx} ⚙️ Result:** \`${preview.replace(/\n/g, ' ')}\``);
+                steps.push(`**${idx} ⣱⢏ Result:** \`${preview.replace(/\n/g, ' ')}\``);
             } else if (type === 'PLANNER_RESPONSE' || entry.source === 'MODEL') {
                 const text = (entry.content || '').trim();
                 if (text) {
                     const preview = text.length > 90 ? text.substring(0, 87) + '...' : text;
-                    steps.push(`**${idx} 🤖 AGY:** ${preview.replace(/\n/g, ' ')}`);
+                    steps.push(`**${idx} ⢎⡱ AGY:** ${preview.replace(/\n/g, ' ')}`);
                 }
             } else {
-                steps.push(`**${idx} ℹ️ [${type}]**`);
+                steps.push(`**${idx} ⢨⡅ [${type}]**`);
             }
         } catch {
             // Non-JSON or incomplete line ignored in timeline
         }
     }
 
-    let summary = `**📜 Conversation Timeline (Recent Steps):**\n\n`;
+    let summary = `**⣏⣛ Conversation Timeline (Recent Steps):**\n\n`;
     if (steps.length === 0) {
         summary += `*(No structured steps parsed. View raw trace attachment below.)*\n`;
     } else {
@@ -598,11 +598,11 @@ async function executeOllamaMessage(roomId, tmid, promptText, customModel = null
         }
 
         const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
-        let reply = `[⚡ **Local Ollama** (\`${targetModel}\` • ${elapsedSec}s)]\n\n${result.text}`;
+        let reply = `[⢴⠃ **Local Ollama** (\`${targetModel}\` • ${elapsedSec}s)]\n\n${result.text}`;
         let attachments = [];
         if (result.thinking && result.thinking.trim()) {
             attachments.push(makeCollapsibleAttachment(
-                `💭 Thought Process (${targetModel} • click to expand)`,
+                `⠪⡕ Thought Process (${targetModel} • click to expand)`,
                 result.thinking.trim(),
                 null,
                 '#8b5cf6'
@@ -843,12 +843,12 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null, ex
             isFinished = true;
             console.error(`Spawn error: ${error.message}`);
             const attachments = [
-                makeCollapsibleAttachment('🔍 Process Spawn Error Trace', error.stack || error.message, 'text', '#ef4444')
+                makeCollapsibleAttachment('⠪⢕ Process Spawn Error Trace', error.stack || error.message, 'text', '#ef4444')
             ];
             if (thinkingMsgId) {
-                await updateMessage(roomId, thinkingMsgId, `❌ **Antigravity CLI Process Spawn Error**\n${error.message}`, attachments);
+                await updateMessage(roomId, thinkingMsgId, `⡱⢎ **Antigravity CLI Process Spawn Error**\n${error.message}`, attachments);
             } else {
-                await postMessage(roomId, tmid, `❌ **Antigravity CLI Process Spawn Error**\n${error.message}`, attachments);
+                await postMessage(roomId, tmid, `⡱⢎ **Antigravity CLI Process Spawn Error**\n${error.message}`, attachments);
             }
             if (typeof onComplete === 'function') {
                 onComplete();
@@ -886,7 +886,7 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null, ex
                 if (finalResultObj.response) {
                     finalOutput = finalResultObj.response;
                 } else if (finalResultObj.error) {
-                    finalOutput = `❌ **Antigravity CLI Error**\n${finalResultObj.error}`;
+                    finalOutput = `⡱⢎ **Antigravity CLI Error**\n${finalResultObj.error}`;
                 } else {
                     finalOutput = JSON.stringify(finalResultObj, null, 2);
                 }
@@ -895,7 +895,7 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null, ex
                     const traceSnippet = rawOutput.trim() ? rawOutput.substring(Math.max(0, rawOutput.length - 2500)) : '';
                     if (traceSnippet) {
                         attachments.push(makeCollapsibleAttachment(
-                            '🔍 Raw Trace Details (click to expand)',
+                            '⠪⢕ Raw Trace Details (click to expand)',
                             traceSnippet,
                             'json',
                             '#ef4444'
@@ -903,10 +903,10 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null, ex
                     }
                 }
             } else {
-                finalOutput = `❌ **Antigravity Exited Abruptly** (Exit code: \`${code}\`)\nCheck container logs or expand the diagnostic trace below.`;
+                finalOutput = `⡱⢎ **Antigravity Exited Abruptly** (Exit code: \`${code}\`)\nCheck container logs or expand the diagnostic trace below.`;
                 const traceSnippet = rawOutput.trim() ? rawOutput.substring(Math.max(0, rawOutput.length - 2500)) : '(No output captured)';
                 attachments.push(makeCollapsibleAttachment(
-                    '🔍 Raw Trace Details (click to expand)',
+                    '⠪⢕ Raw Trace Details (click to expand)',
                     traceSnippet,
                     'json',
                     '#ef4444'
@@ -921,7 +921,7 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null, ex
             }
 
             if (extraContext && extraContext.wasRefined) {
-                finalOutput = `> 💡 **Refined Prompt (${extraContext.latencySec}s):** *${extraContext.refinedPrompt}*\n\n` + finalOutput;
+                finalOutput = `> ⠪⡕ **Refined Prompt (${extraContext.latencySec}s):** *${extraContext.refinedPrompt}*\n\n` + finalOutput;
             }
 
             // Post-turn Git Auto-commit & push back to Gitea
@@ -932,12 +932,12 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null, ex
             });
 
             if (postSync.secretDetected) {
-                finalOutput += `\n\n*(🛡️ **Git Auto-Commit Blocked:** Potential secret detected: \`${postSync.secretReason}\`. Files remain uncommitted.)*`;
+                finalOutput += `\n\n*(⣮⣵ **Git Auto-Commit Blocked:** Potential secret detected: \`${postSync.secretReason}\`. Files remain uncommitted.)*`;
             } else if (postSync.committed && postSync.pushed) {
                 const commitSummary = postSync.commitMessage ? ` — "${postSync.commitMessage}"` : '';
-                finalOutput += `\n\n*(🚀 Auto-committed & pushed to Gitea: \`${postSync.commitHash}\` on \`${postSync.branch}\`${commitSummary})*`;
+                finalOutput += `\n\n*(⡴⢧ Auto-committed & pushed to Gitea: \`${postSync.commitHash}\` on \`${postSync.branch}\`${commitSummary})*`;
             } else if (postSync.committed && !postSync.pushed) {
-                finalOutput += `\n\n*(⚠️ Committed \`${postSync.commitHash}\` locally, but push to Gitea failed: ${postSync.pushError})*`;
+                finalOutput += `\n\n*(⢘⡃ Committed \`${postSync.commitHash}\` locally, but push to Gitea failed: ${postSync.pushError})*`;
             }
 
             // Post-turn Background Lesson Distillation via Local Ollama
@@ -1033,11 +1033,11 @@ async function executePromptJob(job) {
         const preFlight = syncPreFlight(repoDir);
         let preFlightNotice = '';
         if (preFlight.isGit && preFlight.newCommits > 0) {
-            preFlightNotice = `📥 *Synced ${preFlight.newCommits} new commit(s) from Gitea (${preFlight.headHash}) before commencing.*\n\n`;
+            preFlightNotice = `⣚⣗ *Synced ${preFlight.newCommits} new commit(s) from Gitea (${preFlight.headHash}) before commencing.*\n\n`;
             console.log(`[Rocket-Grav] Pre-flight: synced ${preFlight.newCommits} commit(s) from Gitea in ${repoDir}`);
         }
         if (preFlight.stashConflict) {
-            await postMessage(roomId, tmid, `⚠️ **Git Merge Conflict during Pre-Flight Stash Pop in \`${path.basename(repoDir)}\`**\nPlease check local files or commit manually.`);
+            await postMessage(roomId, tmid, `⢘⡃ **Git Merge Conflict during Pre-Flight Stash Pop in \`${path.basename(repoDir)}\`**\nPlease check local files or commit manually.`);
         }
 
         if (isOllamaDirect) {
@@ -1073,7 +1073,7 @@ async function executePromptJob(job) {
         runAgySession(roomId, tmid, messageText, existingMsgId, refinedContext, onComplete, repoDir, preFlightNotice);
     } catch (err) {
         console.error(`[Queue] Error executing job ${job.id}:`, err);
-        await postMessage(roomId, tmid, `❌ **Job Execution Error**: ${err.message}`);
+        await postMessage(roomId, tmid, `⡱⢎ **Job Execution Error**: ${err.message}`);
         onComplete();
     }
 }
@@ -1191,7 +1191,7 @@ app.post('/webhook', async (req, res) => {
             `*   **Auto-Update Status:** ${autoUpdateState.enabled ? `Enabled (daily check every ${autoUpdateState.intervalHours}h)` : 'Disabled'}\n` +
             `*   **Last Auto-Check:** ${autoUpdateState.lastCheck ? new Date(autoUpdateState.lastCheck).toLocaleString() : 'Never'}\n` +
             `*   **Last Status:** \`${autoUpdateState.lastResult}\`\n` +
-            `*   **Status:** ${hasUpdate ? `⚡ **Update available!** Run \`!agy update\` to upgrade immediately.` : `✓ Antigravity CLI is up to date.`}`;
+            `*   **Status:** ${hasUpdate ? `⢴⠃ **Update available!** Run \`!agy update\` to upgrade immediately.` : `✓ Antigravity CLI is up to date.`}`;
         
         await postMessage(roomId, tmid, reply);
         return;
@@ -1203,13 +1203,13 @@ app.post('/webhook', async (req, res) => {
             const checkResult = await checkAndApplyAgyUpdate('manual-chat');
             let reply = '';
             if (checkResult.updateAvailable && checkResult.updated) {
-                reply = `[✓] **Antigravity CLI updated successfully!**\n* Previous version: \`${checkResult.previousVersion}\`\n* New version: \`${checkResult.newVersion}\``;
+                reply = `[⢄⠎] **Antigravity CLI updated successfully!**\n* Previous version: \`${checkResult.previousVersion}\`\n* New version: \`${checkResult.newVersion}\``;
             } else if (!checkResult.updateAvailable && checkResult.currentVersion) {
-                reply = `[✓] **Antigravity CLI is already up to date:** \`${checkResult.currentVersion}\` (Latest: \`${checkResult.latestVersion || checkResult.currentVersion}\`).`;
+                reply = `[⢄⠎] **Antigravity CLI is already up to date:** \`${checkResult.currentVersion}\` (Latest: \`${checkResult.latestVersion || checkResult.currentVersion}\`).`;
             } else if (checkResult.error) {
-                reply = `[✗] **Update check failed:** ${checkResult.error}`;
+                reply = `[⡱⢎] **Update check failed:** ${checkResult.error}`;
             } else {
-                reply = `[✓] Antigravity CLI check completed: \`${checkResult.newVersion || checkResult.currentVersion}\``;
+                reply = `[⢄⠎] Antigravity CLI check completed: \`${checkResult.newVersion || checkResult.currentVersion}\``;
             }
             if (thinkingMsgId) {
                 await updateMessage(roomId, thinkingMsgId, reply);
@@ -1217,7 +1217,7 @@ app.post('/webhook', async (req, res) => {
                 await postMessage(roomId, tmid, reply);
             }
         } catch (err) {
-            const errReply = `[✗] **Error updating Antigravity CLI:** ${err.message}`;
+            const errReply = `[⡱⢎] **Error updating Antigravity CLI:** ${err.message}`;
             if (thinkingMsgId) {
                 await updateMessage(roomId, thinkingMsgId, errReply);
             } else {
@@ -1248,11 +1248,11 @@ app.post('/webhook', async (req, res) => {
         const requestedModel = messageText.split(' ').slice(2).join(' ').trim().toLowerCase();
         if (MODEL_ALIASES.hasOwnProperty(requestedModel)) {
             currentModel = MODEL_ALIASES[requestedModel];
-            await postMessage(roomId, tmid, `[✓] Switched to: **${currentModel || 'default (subscription)'}**`);
+            await postMessage(roomId, tmid, `[⢄⠎] Switched to: **${currentModel || 'default (subscription)'}**`);
         } else {
             // Assume they passed a full model ID directly
             currentModel = requestedModel;
-            await postMessage(roomId, tmid, `[✓] Switched to: **${currentModel}**\n*(Note: using raw model ID — make sure this is valid)*`);
+            await postMessage(roomId, tmid, `[⢄⠎] Switched to: **${currentModel}**\n*(Note: using raw model ID — make sure this is valid)*`);
         }
         return;
     }
@@ -1274,7 +1274,7 @@ app.post('/webhook', async (req, res) => {
         try {
             const { execFileSync } = require('child_process');
             if (!fs.existsSync('/workspace/.beads')) {
-                await postMessage(roomId, tmid, 'ℹ️ No Beads project initialized in `/workspace` yet.');
+                await postMessage(roomId, tmid, '⢨⡅ No Beads project initialized in `/workspace` yet.');
                 return;
             }
             const bdPath = fs.existsSync('/usr/local/bin/bd') ? '/usr/local/bin/bd' : 'bd';
@@ -1284,9 +1284,9 @@ app.post('/webhook', async (req, res) => {
         } catch (e) {
             const errOut = e.stdout ? e.stdout.toString() : e.message;
             const attachments = [
-                makeCollapsibleAttachment('🔍 Beads Error Trace', errOut, 'text', '#ef4444')
+                makeCollapsibleAttachment('⠪⢕ Beads Error Trace', errOut, 'text', '#ef4444')
             ];
-            await postMessage(roomId, tmid, `❌ **Error retrieving Beads issues**`, attachments);
+            await postMessage(roomId, tmid, `⡱⢎ **Error retrieving Beads issues**`, attachments);
         }
         return;
     }
@@ -1316,7 +1316,7 @@ app.post('/webhook', async (req, res) => {
         exec(`tail -n 25 "${logPath}"`, async (error, stdout) => {
             if (error) {
                 if (thinkingMsgId) {
-                    await updateMessage(roomId, thinkingMsgId, `❌ **Error reading logs:** ${error.message}`);
+                    await updateMessage(roomId, thinkingMsgId, `⡱⢎ **Error reading logs:** ${error.message}`);
                 }
                 return;
             }
@@ -1324,7 +1324,7 @@ app.post('/webhook', async (req, res) => {
             const parsed = formatTranscriptLog(stdout);
             const attachments = [
                 makeCollapsibleAttachment(
-                    '📄 Raw JSONL Log (click to expand)',
+                    '⣟⣳ Raw JSONL Log (click to expand)',
                     parsed.raw.length > 5000 ? parsed.raw.substring(0, 5000) + '\n...[truncated]' : parsed.raw,
                     'json',
                     '#64748b'
@@ -1381,7 +1381,7 @@ app.post('/webhook', async (req, res) => {
         }
 
         const res = addMemory(lessonText, { isGlobal });
-        await postMessage(roomId, tmid, res.message || `[✗] ${res.error}`);
+        await postMessage(roomId, tmid, res.message || `[⡱⢎] ${res.error}`);
         return;
     }
 
@@ -1395,7 +1395,7 @@ app.post('/webhook', async (req, res) => {
             if (resGlobal.success) {
                 await postMessage(roomId, tmid, resGlobal.message);
             } else {
-                await postMessage(roomId, tmid, `[✗] No memories found matching "${keyword}" in project or global rules.`);
+                await postMessage(roomId, tmid, `[⡱⢎] No memories found matching "${keyword}" in project or global rules.`);
             }
         }
         return;
@@ -1417,7 +1417,7 @@ app.post('/webhook', async (req, res) => {
     ) {
         const cleared = queueManager.clearQueue();
         const cancelResult = queueManager.cancelActive();
-        let reply = `[✓] **Cancelled all operations:**\n`;
+        let reply = `[⢄⠎] **Cancelled all operations:**\n`;
         if (cancelResult.success) {
             reply += `• Active task cancelled: "${cancelResult.job.messageText.substring(0, 40)}..."\n`;
         } else {
@@ -1436,7 +1436,7 @@ app.post('/webhook', async (req, res) => {
         lowerMessage === 'empty queue'
     ) {
         const cleared = queueManager.clearQueue();
-        await postMessage(roomId, tmid, `[✓] **Queue Cleared:** Removed **${cleared.count}** pending job(s) from the queue.`);
+        await postMessage(roomId, tmid, `[⢄⠎] **Queue Cleared:** Removed **${cleared.count}** pending job(s) from the queue.`);
         return;
     }
 
@@ -1471,14 +1471,14 @@ app.post('/webhook', async (req, res) => {
         const thinkingMsgId = await postMessage(roomId, tmid, `\`⠋\` *Binding thread \`${activeThread}\` and cloning \`${repoArg}\` if needed...*`);
         const cloneResult = ensureRepoCloned(activeThread, repoArg);
         if (cloneResult.success) {
-            const reply = `[✓] **Thread \`${activeThread}\` bound to repository:** \`${repoArg}\`\n└─ Working Directory: \`${cloneResult.targetDir}\``;
+            const reply = `[⢄⠎] **Thread \`${activeThread}\` bound to repository:** \`${repoArg}\`\n└─ Working Directory: \`${cloneResult.targetDir}\``;
             if (thinkingMsgId) {
                 await updateMessage(roomId, thinkingMsgId, reply);
             } else {
                 await postMessage(roomId, tmid, reply);
             }
         } else {
-            const errReply = `[✗] **Failed to bind/clone repository:** ${cloneResult.error}`;
+            const errReply = `[⡱⢎] **Failed to bind/clone repository:** ${cloneResult.error}`;
             if (thinkingMsgId) {
                 await updateMessage(roomId, thinkingMsgId, errReply);
             } else {
@@ -1495,13 +1495,13 @@ app.post('/webhook', async (req, res) => {
         const res = syncPreFlight(repoDir);
         let reply = '';
         if (!res.isGit) {
-            reply = `ℹ️ Directory \`${path.basename(repoDir)}\` for thread \`${activeThread}\` is not a Git repository.`;
+            reply = `⢨⡅ Directory \`${path.basename(repoDir)}\` for thread \`${activeThread}\` is not a Git repository.`;
         } else if (res.newCommits > 0) {
-            reply = `[✓] **Synced ${res.newCommits} new commit(s) from Gitea:**\n* Branch: \`${res.branch}\`\n* Latest: \`${res.commitSummary || res.headHash}\``;
+            reply = `[⢄⠎] **Synced ${res.newCommits} new commit(s) from Gitea:**\n* Branch: \`${res.branch}\`\n* Latest: \`${res.commitSummary || res.headHash}\``;
         } else if (res.error) {
-            reply = `[⚠️] **Git fetch/pull warning:** ${res.error}`;
+            reply = `[⢘⡃] **Git fetch/pull warning:** ${res.error}`;
         } else {
-            reply = `[✓] **Already up to date with Gitea:** \`${res.branch}\` at \`${res.headHash}\``;
+            reply = `[⢄⠎] **Already up to date with Gitea:** \`${res.branch}\` at \`${res.headHash}\``;
         }
         if (thinkingMsgId) {
             await updateMessage(roomId, thinkingMsgId, reply);
@@ -1518,16 +1518,16 @@ app.post('/webhook', async (req, res) => {
         const res = await syncPostTurn(repoDir, { threadName: activeThread, promptText: 'Manual push from chat' });
         let reply = '';
         if (!res.isGit) {
-            reply = `ℹ️ Directory \`${path.basename(repoDir)}\` for thread \`${activeThread}\` is not a Git repository.`;
+            reply = `⢨⡅ Directory \`${path.basename(repoDir)}\` for thread \`${activeThread}\` is not a Git repository.`;
         } else if (res.secretDetected) {
-            reply = `[🛡️] **Git push blocked by security scanner:** Potential secret detected: \`${res.secretReason}\`.\nFiles were unstaged for safety.`;
+            reply = `[⣮⣵] **Git push blocked by security scanner:** Potential secret detected: \`${res.secretReason}\`.\nFiles were unstaged for safety.`;
         } else if (res.committed && res.pushed) {
             const commitSummary = res.commitMessage ? ` — "${res.commitMessage}"` : '';
-            reply = `[✓] **Committed & Pushed to Gitea:** \`${res.commitHash}\` on \`${res.branch}\` (${res.changedFilesCount} files)${commitSummary}`;
+            reply = `[⢄⠎] **Committed & Pushed to Gitea:** \`${res.commitHash}\` on \`${res.branch}\` (${res.changedFilesCount} files)${commitSummary}`;
         } else if (res.committed && !res.pushed) {
-            reply = `[⚠️] **Committed locally (\`${res.commitHash}\`), but push failed:** ${res.pushError}`;
+            reply = `[⢘⡃] **Committed locally (\`${res.commitHash}\`), but push failed:** ${res.pushError}`;
         } else {
-            reply = `[✓] Working directory in \`${path.basename(repoDir)}\` is clean. Nothing to push.`;
+            reply = `[⢄⠎] Working directory in \`${path.basename(repoDir)}\` is clean. Nothing to push.`;
         }
         if (thinkingMsgId) {
             await updateMessage(roomId, thinkingMsgId, reply);
@@ -1589,7 +1589,7 @@ app.post('/webhook', async (req, res) => {
     if (threadNewMatch) {
         const newName = threadNewMatch[1].trim();
         const res = resolveSwitchTarget(newName);
-        await postMessage(roomId, tmid, res.message || `[✗] ${res.error}`);
+        await postMessage(roomId, tmid, res.message || `[⡱⢎] ${res.error}`);
         return;
     }
 
@@ -1598,7 +1598,7 @@ app.post('/webhook', async (req, res) => {
     if (threadResetMatch) {
         const targetName = threadResetMatch[1] ? threadResetMatch[1].trim() : null;
         const resetName = resetThread(targetName);
-        await postMessage(roomId, tmid, `[✓] **Thread reset:** \`${resetName}\`\n*(Conversation unlinked; a fresh session will start on your next prompt)*`);
+        await postMessage(roomId, tmid, `[⢄⠎] **Thread reset:** \`${resetName}\`\n*(Conversation unlinked; a fresh session will start on your next prompt)*`);
         return;
     }
 
@@ -1608,9 +1608,9 @@ app.post('/webhook', async (req, res) => {
         const targetName = threadDeleteMatch[1].trim();
         const res = deleteThread(targetName);
         if (res.success) {
-            await postMessage(roomId, tmid, `[✓] **Deleted thread:** \`${res.deleted}\`. Active thread is now: \`${res.active_thread}\`.`);
+            await postMessage(roomId, tmid, `[⢄⠎] **Deleted thread:** \`${res.deleted}\`. Active thread is now: \`${res.active_thread}\`.`);
         } else {
-            await postMessage(roomId, tmid, `[✗] ${res.error}`);
+            await postMessage(roomId, tmid, `[⡱⢎] ${res.error}`);
         }
         return;
     }
@@ -1651,7 +1651,7 @@ app.post('/webhook', async (req, res) => {
         if (res.success) {
             await postMessage(roomId, tmid, res.message);
         } else {
-            await postMessage(roomId, tmid, `[✗] ${res.error}`);
+            await postMessage(roomId, tmid, `[⡱⢎] ${res.error}`);
         }
         return;
     }
@@ -1669,14 +1669,14 @@ app.post('/webhook', async (req, res) => {
             const title = messageText.replace(/"/g, '\\"');
             const stdout = execSync(`${bdPath} create "[Epic: ${activeThread}] ${title}"`, { cwd: '/workspace' }).toString();
             const cleanOut = stripAnsi(stdout).trim();
-            await postMessage(roomId, tmid, `[✓] **Logged to Beads Issue Tracker:**\n\`${cleanOut}\``);
+            await postMessage(roomId, tmid, `[⢄⠎] **Logged to Beads Issue Tracker:**\n\`${cleanOut}\``);
         } catch (e) {
             console.error("Beads error:", e.message);
             const errTrace = e.stderr ? e.stderr.toString() : (e.stdout ? e.stdout.toString() : e.message);
             const attachments = [
-                makeCollapsibleAttachment('🔍 Beads Error Trace', errTrace, 'text', '#ef4444')
+                makeCollapsibleAttachment('⠪⢕ Beads Error Trace', errTrace, 'text', '#ef4444')
             ];
-            await postMessage(roomId, tmid, `❌ **Error logging to Beads:** ${e.message}`, attachments);
+            await postMessage(roomId, tmid, `⡱⢎ **Error logging to Beads:** ${e.message}`, attachments);
         }
     }
 
@@ -1684,8 +1684,8 @@ app.post('/webhook', async (req, res) => {
     if (messageText.toLowerCase() === 'mode') {
         const ping = await pingOllama();
         const ollamaStatus = ping.ok 
-            ? `Online ✓ (${ping.latency}ms, ${ping.models.length} model(s) available)`
-            : `Offline ✗ (${ping.error})`;
+            ? `Online [⢄⠎] (${ping.latency}ms, ${ping.models.length} model(s) available)`
+            : `Offline [⡱⢎] (${ping.error})`;
         let modeDesc = '';
         if (bridgeMode === 'hybrid') {
             modeDesc = '**HYBRID** (Auto-offload lighter questions/tasks to local Ollama; complex code/workspace tasks to AGY)';
@@ -1717,7 +1717,7 @@ app.post('/webhook', async (req, res) => {
             if (targetMode === 'hybrid') note = 'Questions & light tasks will be offloaded to local Ollama; coding & file operations will run via AGY.';
             if (targetMode === 'agy') note = 'All prompts will run through Antigravity CLI.';
             if (targetMode === 'ollama') note = 'All prompts will be handled directly by local Ollama.';
-            await postMessage(roomId, tmid, `[✓] Switched bridge mode to: **${targetMode.toUpperCase()}**\n*${note}*`);
+            await postMessage(roomId, tmid, `[⢄⠎] Switched bridge mode to: **${targetMode.toUpperCase()}**\n*${note}*`);
         } else {
             await postMessage(roomId, tmid, `Invalid mode: \`${targetMode}\`. Available modes: \`hybrid\`, \`agy\`, \`ollama\`.`);
         }
@@ -1728,9 +1728,9 @@ app.post('/webhook', async (req, res) => {
     if (messageText.toLowerCase() === 'ollama ping' || messageText.toLowerCase() === 'ollama status') {
         const ping = await pingOllama();
         if (ping.ok) {
-            await postMessage(roomId, tmid, `[✓] **Ollama Online:** Connected to \`${ollamaUrl}\` in **${ping.latency}ms**.\nActive model: \`${ollamaModel}\`\nInstalled models (${ping.models.length}): ${ping.models.map(m => `\`${m}\``).join(', ')}`);
+            await postMessage(roomId, tmid, `[⢄⠎] **Ollama Online:** Connected to \`${ollamaUrl}\` in **${ping.latency}ms**.\nActive model: \`${ollamaModel}\`\nInstalled models (${ping.models.length}): ${ping.models.map(m => `\`${m}\``).join(', ')}`);
         } else {
-            await postMessage(roomId, tmid, `[✗] **Ollama Offline:** Unable to connect to \`${ollamaUrl}\`.\nError: \`${ping.error}\``);
+            await postMessage(roomId, tmid, `[⡱⢎] **Ollama Offline:** Unable to connect to \`${ollamaUrl}\`.\nError: \`${ping.error}\``);
         }
         return;
     }
@@ -1764,7 +1764,7 @@ app.post('/webhook', async (req, res) => {
         if (newModel) {
             ollamaModel = newModel;
             setOllamaModel(newModel);
-            await postMessage(roomId, tmid, `[✓] Switched active Ollama model to: **\`${ollamaModel}\`**`);
+            await postMessage(roomId, tmid, `[⢄⠎] Switched active Ollama model to: **\`${ollamaModel}\`**`);
         } else {
             await postMessage(roomId, tmid, `Please provide a model name, e.g. \`!agy ollama switch phi4-mini:latest\``);
         }

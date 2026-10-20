@@ -99,7 +99,7 @@ function addMemory(lessonText, options = {}) {
                 scope: 'global',
                 targetFile,
                 entry,
-                message: `[✓] **Saved to Global Rules:**\n└─ ${entry}\n\n*(Applies globally to all projects in \`${path.basename(targetFile)}\`)*`
+                message: `[⢄⠎] **Saved to Global Rules:**\n└─ ${entry}\n\n*(Applies globally to all projects in \`${path.basename(targetFile)}\`)*`
             };
         } catch (e) {
             return {
@@ -140,7 +140,7 @@ function addMemory(lessonText, options = {}) {
                 scope: 'project',
                 targetFile,
                 entry,
-                message: `[✓] **Saved to Project Memory:**\n└─ ${entry}\n\n*(Recorded in \`${path.basename(targetFile)}\` for thread \`${threadName}\`)*`
+                message: `[⢄⠎] **Saved to Project Memory:**\n└─ ${entry}\n\n*(Recorded in \`${path.basename(targetFile)}\` for thread \`${threadName}\`)*`
             };
         } catch (e) {
             return {
@@ -224,10 +224,10 @@ function formatMemoryList(options = {}) {
     const threads = getThreads(options.threadsPath);
     const activeThread = options.threadName || threads.active_thread || 'default';
 
-    let reply = `🧠 **Antigravity Context Memory & Lessons Learned**\n`;
+    let reply = `⠪⡕ **Antigravity Context Memory & Lessons Learned**\n`;
     reply += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
 
-    reply += `📁 **Project Memory (\`${path.basename(projectFile)}\`):**\n`;
+    reply += `⣟⣲ **Project Memory (\`${path.basename(projectFile)}\`):**\n`;
     if (projectMemories.length === 0) {
         reply += `*(No lessons recorded for this project yet. Use \`!agy remember <text>\`)*\n\n`;
     } else {
@@ -237,7 +237,7 @@ function formatMemoryList(options = {}) {
         reply += '\n';
     }
 
-    reply += `🌐 **Global Memory (\`${path.basename(globalFile)}\`):**\n`;
+    reply += `⠾⠷ **Global Memory (\`${path.basename(globalFile)}\`):**\n`;
     if (globalMemories.length === 0) {
         reply += `*(No global lessons recorded yet. Use \`!agy remember global <text>\`)*\n\n`;
     } else {
@@ -303,7 +303,7 @@ function removeMemory(targetKeyword, options = {}) {
             success: true,
             removedCount: removedLines.length,
             removedLines,
-            message: `[✓] **Removed ${removedLines.length} memory item(s):**\n` +
+            message: `[⢄⠎] **Removed ${removedLines.length} memory item(s):**\n` +
                 removedLines.map(l => `└─ ${l}`).join('\n')
         };
     } catch (e) {

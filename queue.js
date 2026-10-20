@@ -117,7 +117,7 @@ class QueueManager {
                 return {
                     success: true,
                     job,
-                    message: `[✓] **Cancelled active task:** "${job.messageText.substring(0, 50)}..."`
+                    message: `[⢄⠎] **Cancelled active task:** "${job.messageText.substring(0, 50)}..."`
                 };
             } catch (e) {
                 return {
@@ -148,25 +148,25 @@ class QueueManager {
      * Formats status of the active job and pending queue for Rocket.Chat.
      */
     formatQueueStatus() {
-        let reply = `📋 **FIFO Message Queue Status**\n`;
+        let reply = `⡞⣗ **FIFO Message Queue Status**\n`;
         reply += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
 
         if (!this.activeJob) {
-            reply += `🟢 **Active Task:** *Idle (Ready for prompts)*\n\n`;
+            reply += `⢄⠎ **Active Task:** *Idle (Ready for prompts)*\n\n`;
         } else {
             const elapsed = Math.round((Date.now() - this.activeJob.startedAt) / 1000);
             const promptPreview = this.activeJob.messageText.length > 60
                 ? this.activeJob.messageText.substring(0, 57) + '...'
                 : this.activeJob.messageText;
 
-            reply += `🟡 **Active Task Running:**\n`;
+            reply += `⠕⠪ **Active Task Running:**\n`;
             reply += `• **Prompt:** "${promptPreview}"\n`;
             reply += `• **Thread:** \`${this.activeJob.threadName}\`\n`;
             reply += `• **Elapsed Time:** ${elapsed}s\n`;
             reply += `• **Status:** Processing...\n\n`;
         }
 
-        reply += `⏳ **Pending Queue (${this.queue.length}):**\n`;
+        reply += `⢎⡣ **Pending Queue (${this.queue.length}):**\n`;
         if (this.queue.length === 0) {
             reply += `*(No prompts waiting in line)*\n`;
         } else {
