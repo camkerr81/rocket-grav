@@ -15,5 +15,10 @@ node_modules/
 workspace/
 .env
 
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+
 # Beads / Dolt files (added by bd init)
 .beads/proxieddb/
