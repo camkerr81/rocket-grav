@@ -113,11 +113,11 @@ class RocketChatAdapter extends BaseAdapter {
         return firstMsgId;
     }
 
-    async _rawUpdate(roomId, msgId, text, attachments = null) {
+    async _rawUpdate(roomId, msgId, text) {
+        // Rocket.Chat POST /api/v1/chat.update schema requires strictly { roomId, msgId, text }.
+        // Sending extra properties (e.g. attachments) causes strict Ajv validation failure:
+        // "must NOT have additional properties / must have required property 'content' / must match exactly one schema in oneOf"
         const payload = { roomId, msgId, text };
-        if (Array.isArray(attachments) && attachments.length > 0) {
-            payload.attachments = attachments;
-        }
 
         try {
             const response = await fetch(`${this.url}/api/v1/chat.update`, {
@@ -131,21 +131,6 @@ class RocketChatAdapter extends BaseAdapter {
             });
             const data = await response.json();
             if (!data.success) {
-                // If update failed and attachments were present, retry without attachments
-                if (payload.attachments) {
-                    delete payload.attachments;
-                    const retryResp = await fetch(`${this.url}/api/v1/chat.update`, {
-                        method: 'POST',
-                        headers: {
-                            'X-Auth-Token': this.pat,
-                            'X-User-Id': this.userId,
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify(payload)
-                    });
-                    const retryData = await retryResp.json();
-                    return retryData.success === true;
-                }
                 console.warn(`[RocketChatAdapter] chat.update rejected (msgId: ${msgId}):`, data);
                 return false;
             }
@@ -160,10 +145,10 @@ class RocketChatAdapter extends BaseAdapter {
         if (!this.userId || !this.pat || !msgId) return false;
 
         const chunks = splitMessageText(text, 3800);
-        const firstChunk = chunks[0] || '';
-        const firstAttachments = (chunks.length === 1) ? attachments : null;
+        const firstChunk = chunks[0] || '(empty response)';
 
-        const updateOk = await this._rawUpdate(roomId, msgId, firstChunk, firstAttachments);
+        // Perform in-place text update on the existing placeholder message
+        const updateOk = await this._rawUpdate(roomId, msgId, firstChunk);
 
         if (!updateOk) {
             // Placeholder update failed (e.g. invalid arguments or deleted message)
@@ -176,10 +161,13 @@ class RocketChatAdapter extends BaseAdapter {
         // If message was split across multiple chunks, post follow-up parts into room/thread
         if (chunks.length > 1) {
             for (let i = 1; i < chunks.length; i++) {
-                const isLast = (i === chunks.length - 1);
-                const chunkAttachments = isLast ? attachments : null;
-                await this.postMessage(roomId, tmid, chunks[i], chunkAttachments);
+                await this.postMessage(roomId, tmid, chunks[i]);
             }
+        }
+
+        // If attachments were provided, post them into the thread since chat.update does not support attachments
+        if (Array.isArray(attachments) && attachments.length > 0) {
+            await this.postMessage(roomId, tmid, '', attachments);
         }
 
         return true;

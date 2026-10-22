@@ -17,9 +17,9 @@ adapter.postMessage = async (roomId, tmid, text, attachments = null) => {
     return `msg_${mockPostCalls.length}`;
 };
 
-adapter._rawUpdate = async (roomId, msgId, text, attachments = null) => {
+adapter._rawUpdate = async (roomId, msgId, text) => {
     if (simulateUpdateFail) return false;
-    mockUpdateCalls.push({ roomId, msgId, text, attachments });
+    mockUpdateCalls.push({ roomId, msgId, text });
     return true;
 };
 
@@ -57,6 +57,18 @@ async function runTests() {
     assert.strictEqual(mockPostCalls[0].text, 'Failed update text');
     assert.deepStrictEqual(mockPostCalls[0].attachments, [{ title: 'Trace' }]);
     console.log('[Test] ✓ Fallback to postMessage when update fails passed');
+
+    // Update with attachments: text updated in place without extra properties, attachments posted to thread
+    mockUpdateCalls = [];
+    mockPostCalls = [];
+    simulateUpdateFail = false;
+    ok = await adapter.updateMessage('room1', 'msg123', 'Response with attachment', [{ title: 'Trace Details' }], 'tmid_abc');
+    assert.strictEqual(ok, true);
+    assert.strictEqual(mockUpdateCalls.length, 1);
+    assert.strictEqual(mockUpdateCalls[0].text, 'Response with attachment');
+    assert.strictEqual(mockPostCalls.length, 1);
+    assert.deepStrictEqual(mockPostCalls[0].attachments, [{ title: 'Trace Details' }]);
+    console.log('[Test] ✓ Update with attachments routes text to chat.update and attachments to postMessage');
 
     // Test 3: Stream line buffering logic simulation
     console.log('[Test] Testing stream chunk fragmentation simulation...');
