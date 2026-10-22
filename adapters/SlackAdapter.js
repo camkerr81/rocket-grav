@@ -74,7 +74,7 @@ class SlackAdapter extends BaseAdapter {
         }
     }
 
-    async updateMessage(roomId, msgId, text, attachments = null) {
+    async updateMessage(roomId, msgId, text, attachments = null, tmid = null) {
         if (!this.botToken || !msgId) return;
 
         const payload = {

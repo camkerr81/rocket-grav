@@ -506,9 +506,9 @@ const postMessage = (roomId, tmid, text, attachments = null) => {
     const formatted = formatPrettyMarkdown(text);
     return adapter.postMessage(roomId, tmid, formatted, attachments);
 };
-const updateMessage = (roomId, msgId, text, attachments = null) => {
+const updateMessage = (roomId, msgId, text, attachments = null, tmid = null) => {
     const formatted = formatPrettyMarkdown(text);
-    return adapter.updateMessage(roomId, msgId, formatted, attachments);
+    return adapter.updateMessage(roomId, msgId, formatted, attachments, tmid);
 };
 
 /**
@@ -711,6 +711,7 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null, ex
     
     // Setup animation loop
     let isFinished = false;
+    let animateTimer = null;
     let currentStatus = "*Initializing...*";
     let recentActions = [];
     let currentToolParams = {};
@@ -734,14 +735,20 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null, ex
             const message = buildStatusMessage(frames[frameIdx]);
             if (message !== lastRenderedMessage) {
                 lastRenderedMessage = message;
-                await updateMessage(roomId, thinkingMsgId, message);
+                try {
+                    await updateMessage(roomId, thinkingMsgId, message, null, tmid);
+                } catch (e) {
+                    console.warn(`[Rocket-Grav] Live status render warning: ${e.message}`);
+                }
             }
             
             frameIdx = (frameIdx + 1) % frames.length;
             
-            if (!isFinished) setTimeout(animate, 600);
+            if (!isFinished) {
+                animateTimer = setTimeout(animate, 800);
+            }
         };
-        setTimeout(animate, 600);
+        animateTimer = setTimeout(animate, 800);
     }
 
     // Standard AGY execution
@@ -764,15 +771,40 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null, ex
         const child = spawn('agy', commandArgs, { cwd: targetCwd, shell: false });
         if (convId) activeProcesses[convId] = child;
         queueManager.attachProcess(child);
+
+        // Crucial: close stdin immediately so child or spawned subprocesses don't hang waiting for input
+        if (child.stdin) {
+            try { child.stdin.end(); } catch (_) {}
+        }
         
         let finalResultObj = null;
         let rawOutput = '';
+        let streamedResponseText = '';
+        let stdoutRemainder = '';
         let imageGenerationCount = 0;
+        let completedTurn = false;
+
+        // Safety watchdog: terminate if stuck with zero activity for 10 minutes
+        const executionTimeout = setTimeout(() => {
+            if (!completedTurn) {
+                console.warn(`[Rocket-Grav] Execution watchdog triggered after 10m for attempt ${attempt}. Terminating process.`);
+                try { child.kill('SIGTERM'); } catch (_) {}
+                setTimeout(() => {
+                    if (!completedTurn) {
+                        try { child.kill('SIGKILL'); } catch (_) {}
+                        handleProcessCompletion(124);
+                    }
+                }, 3000);
+            }
+        }, 600000);
 
         child.stdout.on('data', (d) => {
-            const text = d.toString();
-            rawOutput += text;
-            const lines = text.split('\n');
+            const rawChunk = d.toString();
+            rawOutput += rawChunk;
+            const chunk = stdoutRemainder + rawChunk;
+            const lines = chunk.split('\n');
+            stdoutRemainder = lines.pop(); // Keep partial line buffer
+
             for (let line of lines) {
                 if (!line.trim()) continue;
                 try {
@@ -817,6 +849,7 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null, ex
                             process.stdout.write(`\x1b[90m${parsed.step_update.thinking_delta}\x1b[0m`);
                         } else if (parsed.step_update.text_delta) {
                             currentStatus = "*Writing response...*";
+                            streamedResponseText += parsed.step_update.text_delta;
                             process.stdout.write(parsed.step_update.text_delta);
                         }
                     } else if (parsed.event === 'result') {
@@ -839,23 +872,30 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null, ex
             process.stderr.write(text);
         });
 
-        child.on('error', async (error) => {
-            isFinished = true;
-            console.error(`Spawn error: ${error.message}`);
-            const attachments = [
-                makeCollapsibleAttachment('⠪⢕ Process Spawn Error Trace', error.stack || error.message, 'text', '#ef4444')
-            ];
-            if (thinkingMsgId) {
-                await updateMessage(roomId, thinkingMsgId, `⡱⢎ **Antigravity CLI Process Spawn Error**\n${error.message}`, attachments);
-            } else {
-                await postMessage(roomId, tmid, `⡱⢎ **Antigravity CLI Process Spawn Error**\n${error.message}`, attachments);
-            }
-            if (typeof onComplete === 'function') {
-                onComplete();
-            }
-        });
+        const handleProcessCompletion = async (code) => {
+            if (completedTurn) return;
+            completedTurn = true;
+            clearTimeout(executionTimeout);
 
-        child.on('close', async (code) => {
+            // Halt animation immediately
+            isFinished = true;
+            if (animateTimer) {
+                clearTimeout(animateTimer);
+                animateTimer = null;
+            }
+
+            // Flush any remaining stdout line
+            if (stdoutRemainder && stdoutRemainder.trim()) {
+                try {
+                    const parsed = JSON.parse(stdoutRemainder.trim());
+                    if (parsed.event === 'result') {
+                        finalResultObj = parsed.result;
+                    } else if (parsed.step_update && parsed.step_update.text_delta) {
+                        streamedResponseText += parsed.step_update.text_delta;
+                    }
+                } catch (_) {}
+            }
+
             console.log(`\nCommand exited with code ${code}`);
             
             if (finalResultObj && finalResultObj.conversation_id) {
@@ -868,42 +908,32 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null, ex
             if (code !== 0) hasError = true;
             if (finalResultObj && finalResultObj.error) hasError = true;
 
-            if (hasError && attempt < 3) {
+            // Retry logic only if failure occurred before any response was generated
+            if (hasError && attempt < 3 && !streamedResponseText.trim() && !finalResultObj) {
                 currentStatus = `Command failed. Retrying (Attempt ${attempt + 1}/3)...`;
                 console.log(currentStatus);
                 setTimeout(() => executeAgy(attempt + 1), 2000);
                 return;
             }
 
-            isFinished = true;
             let finalOutput = '';
             let attachments = [];
 
-            if (finalResultObj) {
-                if (finalResultObj.conversation_id) {
-                    updateThreadConvId(activeThreadName, finalResultObj.conversation_id);
-                }
-                if (finalResultObj.response) {
-                    finalOutput = finalResultObj.response;
-                } else if (finalResultObj.error) {
-                    finalOutput = `⡱⢎ **Antigravity CLI Error**\n${finalResultObj.error}`;
-                } else {
-                    finalOutput = JSON.stringify(finalResultObj, null, 2);
-                }
+            if (finalResultObj && finalResultObj.conversation_id) {
+                updateThreadConvId(activeThreadName, finalResultObj.conversation_id);
+            }
 
-                if (finalResultObj.error || hasError) {
-                    const traceSnippet = rawOutput.trim() ? rawOutput.substring(Math.max(0, rawOutput.length - 2500)) : '';
-                    if (traceSnippet) {
-                        attachments.push(makeCollapsibleAttachment(
-                            '⠪⢕ Raw Trace Details (click to expand)',
-                            traceSnippet,
-                            'json',
-                            '#ef4444'
-                        ));
-                    }
-                }
+            // Prioritize final result response, fall back to accumulated streamed deltas
+            if (finalResultObj && finalResultObj.response && finalResultObj.response.trim()) {
+                finalOutput = finalResultObj.response;
+            } else if (streamedResponseText && streamedResponseText.trim()) {
+                finalOutput = streamedResponseText.trim();
+            } else if (finalResultObj && finalResultObj.error) {
+                finalOutput = `⡱⢎ **Antigravity CLI Error**\n${finalResultObj.error}`;
+            } else if (finalResultObj) {
+                finalOutput = JSON.stringify(finalResultObj, null, 2);
             } else {
-                finalOutput = `⡱⢎ **Antigravity Exited Abruptly** (Exit code: \`${code}\`)\nCheck container logs or expand the diagnostic trace below.`;
+                finalOutput = `⡱⢎ **Antigravity Exited** (Exit code: \`${code}\`)\nCheck container logs or expand the diagnostic trace below.`;
                 const traceSnippet = rawOutput.trim() ? rawOutput.substring(Math.max(0, rawOutput.length - 2500)) : '(No output captured)';
                 attachments.push(makeCollapsibleAttachment(
                     '⠪⢕ Raw Trace Details (click to expand)',
@@ -913,9 +943,19 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null, ex
                 ));
             }
 
+            if (finalResultObj && (finalResultObj.error || hasError) && attachments.length === 0) {
+                const traceSnippet = rawOutput.trim() ? rawOutput.substring(Math.max(0, rawOutput.length - 2500)) : '';
+                if (traceSnippet) {
+                    attachments.push(makeCollapsibleAttachment(
+                        '⠪⢕ Raw Trace Details (click to expand)',
+                        traceSnippet,
+                        'json',
+                        '#ef4444'
+                    ));
+                }
+            }
+
             if (imageGenerationCount > 0) {
-                // Text queries are covered by Antigravity subscription ($0)
-                // We only bill for generated images via GCP API (~$0.03 per image)
                 const imageCost = imageGenerationCount * 0.03;
                 finalOutput += `\n\n*(Estimated GCP API cost for ${imageGenerationCount} image(s): $${imageCost.toFixed(4)})*`;
             }
@@ -924,23 +964,57 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null, ex
                 finalOutput = `> ⠪⡕ **Refined Prompt (${extraContext.latencySec}s):** *${extraContext.refinedPrompt}*\n\n` + finalOutput;
             }
 
-            // Post-turn Git Auto-commit & push back to Gitea
-            const targetCwd = repoDir || '/workspace';
-            const postSync = await syncPostTurn(targetCwd, {
-                threadName: activeThreadName,
-                promptText: messageText
-            });
-
-            if (postSync.secretDetected) {
-                finalOutput += `\n\n*(⣮⣵ **Git Auto-Commit Blocked:** Potential secret detected: \`${postSync.secretReason}\`. Files remain uncommitted.)*`;
-            } else if (postSync.committed && postSync.pushed) {
-                const commitSummary = postSync.commitMessage ? ` — "${postSync.commitMessage}"` : '';
-                finalOutput += `\n\n*(⡴⢧ Auto-committed & pushed to Gitea: \`${postSync.commitHash}\` on \`${postSync.branch}\`${commitSummary})*`;
-            } else if (postSync.committed && !postSync.pushed) {
-                finalOutput += `\n\n*(⢘⡃ Committed \`${postSync.commitHash}\` locally, but push to Gitea failed: ${postSync.pushError})*`;
+            if (preFlightNotice) {
+                finalOutput = preFlightNotice + finalOutput;
             }
 
-            // Post-turn Background Lesson Distillation via Local Ollama
+            // CRUCIAL: Immediately deliver response to chat so user never hangs waiting on git sync or memory!
+            console.log(`[Rocket-Grav] Delivering final output to room ${roomId} (msgId: ${thinkingMsgId || 'new'})...`);
+            try {
+                if (thinkingMsgId) {
+                    await updateMessage(roomId, thinkingMsgId, finalOutput, attachments.length > 0 ? attachments : null, tmid);
+                } else {
+                    await postMessage(roomId, tmid, finalOutput, attachments.length > 0 ? attachments : null);
+                }
+            } catch (deliverErr) {
+                console.error(`[Rocket-Grav] Primary message update error: ${deliverErr.message}. Falling back to postMessage.`);
+                await postMessage(roomId, tmid, finalOutput, attachments.length > 0 ? attachments : null);
+            }
+
+            // Release the FIFO queue immediately so queued tasks proceed
+            if (typeof onComplete === 'function') {
+                onComplete();
+            }
+
+            // Non-blocking Post-turn Git Auto-commit & push back to Gitea in the background
+            const targetCwd = repoDir || '/workspace';
+            syncPostTurn(targetCwd, {
+                threadName: activeThreadName,
+                promptText: messageText
+            }).then(async (postSync) => {
+                let gitNotice = '';
+                if (postSync.secretDetected) {
+                    gitNotice = `*(⣮⣵ **Git Auto-Commit Blocked:** Potential secret detected: \`${postSync.secretReason}\`. Files remain uncommitted.)*`;
+                } else if (postSync.committed && postSync.pushed) {
+                    const commitSummary = postSync.commitMessage ? ` — "${postSync.commitMessage}"` : '';
+                    gitNotice = `*(⡴⢧ Auto-committed & pushed to Gitea: \`${postSync.commitHash}\` on \`${postSync.branch}\`${commitSummary})*`;
+                } else if (postSync.committed && !postSync.pushed) {
+                    gitNotice = `*(⢘⡃ Committed \`${postSync.commitHash}\` locally, but push to Gitea failed: ${postSync.pushError})*`;
+                }
+
+                if (gitNotice) {
+                    const updatedOutput = `${finalOutput}\n\n${gitNotice}`;
+                    if (thinkingMsgId) {
+                        await updateMessage(roomId, thinkingMsgId, updatedOutput, attachments.length > 0 ? attachments : null, tmid);
+                    } else {
+                        await postMessage(roomId, tmid, gitNotice);
+                    }
+                }
+            }).catch((gitErr) => {
+                console.warn(`[Rocket-Grav] Background post-turn git sync warning: ${gitErr.message}`);
+            });
+
+            // Non-blocking Background Lesson Distillation via Local Ollama
             autoDistillAndSaveLesson(messageText, finalOutput, {
                 workspaceDir: targetCwd,
                 threadName: activeThreadName
@@ -949,22 +1023,46 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null, ex
                     console.log(`[Rocket-Grav] Memory distilled into AGENTS.md for ${activeThreadName}: "${memRes.lesson}"`);
                 }
             }).catch(memErr => {
-                console.warn(`[Rocket-Grav] Background memory distillation error: ${memErr.message}`);
+                console.warn(`[Rocket-Grav] Background memory distillation warning: ${memErr.message}`);
             });
+        };
 
-            if (preFlightNotice) {
-                finalOutput = preFlightNotice + finalOutput;
+        child.on('error', async (error) => {
+            if (completedTurn) return;
+            completedTurn = true;
+            isFinished = true;
+            if (animateTimer) {
+                clearTimeout(animateTimer);
+                animateTimer = null;
             }
-
+            clearTimeout(executionTimeout);
+            console.error(`Spawn error: ${error.message}`);
+            const attachments = [
+                makeCollapsibleAttachment('⠪⢕ Process Spawn Error Trace', error.stack || error.message, 'text', '#ef4444')
+            ];
+            const errMsg = `⡱⢎ **Antigravity CLI Process Spawn Error**\n${error.message}`;
             if (thinkingMsgId) {
-                await updateMessage(roomId, thinkingMsgId, finalOutput, attachments.length > 0 ? attachments : null);
+                await updateMessage(roomId, thinkingMsgId, errMsg, attachments, tmid);
             } else {
-                await postMessage(roomId, tmid, finalOutput, attachments.length > 0 ? attachments : null);
+                await postMessage(roomId, tmid, errMsg, attachments);
             }
-
             if (typeof onComplete === 'function') {
                 onComplete();
             }
+        });
+
+        child.on('close', (code) => {
+            handleProcessCompletion(code !== null ? code : 0);
+        });
+
+        child.on('exit', (code) => {
+            // If stdio streams do not close within 1500ms after process exit, force completion
+            setTimeout(() => {
+                if (!completedTurn) {
+                    console.log('[Rocket-Grav] Child process exited; forcing completion handler.');
+                    handleProcessCompletion(code !== null ? code : 0);
+                }
+            }, 1500);
         });
     };
 

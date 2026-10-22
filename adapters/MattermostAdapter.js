@@ -58,7 +58,7 @@ class MattermostAdapter extends BaseAdapter {
         }
     }
 
-    async updateMessage(roomId, msgId, text, attachments = null) {
+    async updateMessage(roomId, msgId, text, attachments = null, tmid = null) {
         if (!this.pat || !msgId) return;
 
         const payload = {

@@ -154,7 +154,8 @@ function ensureRepoCloned(threadName, repoSlugOrUrl = null, customRoot = null) {
         console.log(`[GitSync] Cloning ${cloneUrl} into ${targetDir}...`);
         execSync(`git clone "${cloneUrl}" "${targetDir}"`, {
             stdio: 'pipe',
-            timeout: 60000
+            timeout: 60000,
+            env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
         });
 
         setThreadRepoMapping(threadName, targetSlug);
@@ -186,7 +187,12 @@ function syncPreFlight(repoDir) {
         return { isGit: false, synced: false, reason: 'Not a git repository' };
     }
 
-    const execOpts = { cwd: repoDir, stdio: 'pipe', timeout: 30000 };
+    const execOpts = {
+        cwd: repoDir,
+        stdio: 'pipe',
+        timeout: 30000,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+    };
     let stashed = false;
     let newCommits = 0;
     let branch = 'main';
@@ -390,7 +396,12 @@ async function syncPostTurn(repoDir, options = {}) {
         return { isGit: false, committed: false };
     }
 
-    const execOpts = { cwd: repoDir, stdio: 'pipe', timeout: 45000 };
+    const execOpts = {
+        cwd: repoDir,
+        stdio: 'pipe',
+        timeout: 30000,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+    };
     const threadName = options.threadName || 'default';
 
     try {

@@ -42,9 +42,10 @@ class BaseAdapter {
      * @param {string} msgId - Message ID to update
      * @param {string} text - New message text
      * @param {Array<object>|null} [attachments=null] - Optional attachments (e.g. collapsible cards)
-     * @returns {Promise<void>}
+     * @param {string|null} [tmid=null] - Optional thread ID (used if falling back to postMessage or follow-up chunks)
+     * @returns {Promise<boolean|void>}
      */
-    async updateMessage(roomId, msgId, text, attachments = null) {
+    async updateMessage(roomId, msgId, text, attachments = null, tmid = null) {
         throw new Error(`updateMessage() not implemented for ${this.name} adapter.`);
     }
 }
