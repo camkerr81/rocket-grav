@@ -1,0 +1,12 @@
+.git
+.gitignore
+node_modules
+workspace
+.beads
+.claude
+.codex
+.agents
+tests
+docs
+*.log
+*.tmp
