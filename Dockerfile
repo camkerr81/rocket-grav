@@ -27,8 +27,8 @@ COPY package.json package-lock.json* ./
 RUN npm install
 
 # Copy server code, adapters, MCP servers, and Braille tooling
-ARG SOURCE_BUILD=20261023_fix_chat_update_schema_v3
-COPY server.js threads.js memory.js queue.js git_sync.js ollama.js braille.js braille_map.json pyproject.toml ./
+ARG SOURCE_BUILD=20261023_context_check_braille_enforce_v5
+COPY server.js threads.js memory.js queue.js git_sync.js ollama.js context_check.js braille.js braille_map.json pyproject.toml ./
 COPY adapters/ ./adapters/
 COPY mcp/ ./mcp/
 COPY braille_icon/ ./braille_icon/

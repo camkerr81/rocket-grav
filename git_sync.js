@@ -352,15 +352,54 @@ async function scanDiffForSecrets(diffText) {
 }
 
 /**
+ * Ensures a conventional commit message contains an approved tactile Braille icon.
+ * Enforces zero emoji policy and replaces legacy emojis with Braille icons.
+ */
+function ensureBrailleInCommitMessage(message, defaultThread = 'default') {
+    if (!message) return `chore(agy): ⣎⣱ autonomous updates from Rocket.Chat [${defaultThread}]`;
+    let clean = replaceEmojis(message).trim();
+
+    // Check if clean already contains a Braille character (U+2800 - U+28FF)
+    const hasBraille = /[\u2800-\u28FF]/.test(clean);
+    if (hasBraille) return clean;
+
+    // Map conventional commit type to tactile Braille icon
+    const typeMatch = clean.match(/^([a-zA-Z]+)(?:\(([^)]+)\))?:\s*(.+)$/);
+    if (typeMatch) {
+        const type = typeMatch[1].toLowerCase();
+        const scope = typeMatch[2] ? `(${typeMatch[2]})` : '';
+        const desc = typeMatch[3].trim();
+
+        let icon = '⡴⢧'; // Default
+        switch (type) {
+            case 'feat': icon = '⡴⢧'; break;
+            case 'fix': icon = '⠙⢦'; break;
+            case 'chore': icon = '⣎⣱'; break;
+            case 'docs': icon = '⣏⣿'; break;
+            case 'style': icon = '⢞⡷'; break;
+            case 'refactor': icon = '⢎⡱'; break;
+            case 'perf': icon = '⢴⠃'; break;
+            case 'test': icon = '⣠⣇'; break;
+            case 'ci': icon = '⠾⠷'; break;
+            case 'build': icon = '⣏⣹'; break;
+        }
+
+        return `${type}${scope}: ${icon} ${desc}`;
+    }
+
+    return `chore: ⣎⣱ ${clean}`;
+}
+
+/**
  * Generates a concise conventional git commit message using local Ollama.
  */
 async function generateAiCommitMessage(diffStat, promptText, options = {}) {
     const threadName = options.threadName || 'default';
-    const fallback = `chore(agy): autonomous updates from Rocket.Chat [${threadName}]`;
+    const fallback = `chore(agy): ⣎⣱ autonomous updates from Rocket.Chat [${threadName}]`;
 
     try {
         const { queryOllama } = require('./ollama');
-        const systemPrompt = "You are a git commit assistant. Return ONLY a single-line conventional commit message (format: type(scope): summary under 72 chars, e.g. 'feat(auth): add refresh token handler' or 'fix(api): handle null response'). NEVER use emojis. No markdown, no quotes, no explanation.";
+        const systemPrompt = "You are a git commit assistant. Return ONLY a single-line conventional commit message with an approved tactile Braille icon (format: 'type(scope): <braille-icon> summary under 72 chars', e.g. 'feat(auth): ⡴⢧ add refresh token handler' or 'fix(api): ⠙⢦ handle null response'). NEVER use emojis. No markdown, no quotes, no explanation.";
 
         const content = [
             promptText ? `User Prompt: ${promptText.trim().substring(0, 300)}` : null,
@@ -376,7 +415,7 @@ async function generateAiCommitMessage(diffStat, promptText, options = {}) {
 
         const reply = (result.text || '').trim().replace(/^[`"']+|[`"']+$/g, '');
         if (reply && /^(?:feat|fix|chore|refactor|docs|style|test|perf|ci)(?:\([a-zA-Z0-9_\-\.]+\))?:\s+.+/i.test(reply) && reply.length <= 100) {
-            return replaceEmojis(reply);
+            return ensureBrailleInCommitMessage(reply, threadName);
         }
     } catch (e) {
         console.warn(`[GitSync] AI commit message generation bypassed: ${e.message}`);
@@ -467,10 +506,12 @@ async function syncPostTurn(repoDir, options = {}) {
             branch = execSync('git rev-parse --abbrev-ref HEAD', execOpts).toString().trim() || 'main';
         } catch (_) {}
 
-        // 5. Generate commit message (AI-assisted or fallback)
+        // 5. Generate commit message (AI-assisted or fallback, enforcing Braille icons)
         let commitMsg = options.commitMessage;
         if (!commitMsg) {
             commitMsg = await generateAiCommitMessage(stagedStat, options.promptText, { threadName });
+        } else {
+            commitMsg = ensureBrailleInCommitMessage(commitMsg, threadName);
         }
 
         execSync(`git commit -m "${commitMsg.replace(/"/g, '\\"')}"`, execOpts);
@@ -541,7 +582,7 @@ function formatRepoStatusList(customRoot = null) {
             const statusIcon = isGit ? '⢄⠎ Git' : '⠤ Plain';
             const shortDir = path.basename(repoDir);
 
-            reply += `**${isActive ? '★ ' : ''}\`${tName}\`** ${isActive ? '*(Active)*' : ''}\n`;
+            reply += `**${isActive ? '⡺ ' : ''}\`${tName}\`** ${isActive ? '*(Active)*' : ''}\n`;
             reply += `└─ Repo: \`${mapping}\` • Dir: \`${shortDir}/\` • ${statusIcon}\n\n`;
         });
     }
@@ -564,5 +605,6 @@ module.exports = {
     syncPostTurn,
     scanDiffForSecrets,
     generateAiCommitMessage,
+    ensureBrailleInCommitMessage,
     formatRepoStatusList
 };

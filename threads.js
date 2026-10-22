@@ -437,16 +437,16 @@ function formatConversationList(limit = 15, customPath = null) {
         let threadTag = '';
         if (boundThread) {
             const isActive = (boundThread === activeThread);
-            threadTag = isActive ? ` • ⠊⢵ \`${boundThread}\` ★ *(Active)*` : ` • ⠊⢵ \`${boundThread}\``;
+            threadTag = isActive ? ` • ⠊⢵ \`${boundThread}\` ⡺ *(Active)*` : ` • ⠊⢵ \`${boundThread}\``;
         }
 
         const shortId = conv.conversation_id.substring(0, 8) + '...';
-        reply += `**#${num}** ${boundThread && boundThread === activeThread ? '★ ' : ''}**${title}**\n`;
+        reply += `**#${num}** ${boundThread && boundThread === activeThread ? '⡺ ' : ''}**${title}**\n`;
         reply += `└─ ${steps} steps • ${relativeTime}${threadTag} • \`${shortId}\`\n\n`;
     });
 
     reply += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-    reply += `★ = Active thread (\`${activeThread}\`)\n\n`;
+    reply += `⡺ = Active thread (\`${activeThread}\`)\n\n`;
     reply += `*• Switch by index: \`!agy switch <#num>\` (e.g. \`!agy switch 1\`)*\n`;
     reply += `*• Switch by name: \`!agy switch <thread-name>\`*\n`;
     reply += `*• Switch by UUID: \`!agy switch <uuid>\`*`;
@@ -508,18 +508,18 @@ function formatThreadList(customPath = null) {
 
     threadEntries.forEach((entry, idx) => {
         const num = idx + 1;
-        const statusMark = entry.isActive ? `★ *(Active)*` : ``;
+        const statusMark = entry.isActive ? `⡺ *(Active)*` : ``;
         const shortConv = entry.convId ? `\`${entry.convId.substring(0, 8)}...\`` : `*(none)*`;
         const cleanTitle = entry.title.replace(/\|/g, '-');
         const truncatedTitle = cleanTitle.length > 50 ? cleanTitle.substring(0, 48) + '..' : cleanTitle;
         const timeAgo = entry.lastModified ? formatRelativeTime(entry.lastModified) : '-';
 
-        reply += `**#${num}** ${entry.isActive ? '★ ' : ''}\`${entry.name}\` ${statusMark}\n`;
+        reply += `**#${num}** ${entry.isActive ? '⡺ ' : ''}\`${entry.name}\` ${statusMark}\n`;
         reply += `└─ "${truncatedTitle}" • ${entry.steps} steps • ${timeAgo} • ${shortConv}\n\n`;
     });
 
     reply += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-    reply += `★ = Active thread (\`${active}\`)\n\n`;
+    reply += `⡺ = Active thread (\`${active}\`)\n\n`;
     reply += `*• Switch thread: \`!agy switch <name>\` (e.g. \`!agy switch ${threadEntries[1] ? threadEntries[1].name : 'default'}\`)*\n`;
     reply += `*• Switch by index: \`!agy switch <#num>\` | List all: \`!agy conversations\`*\n`;
     reply += `*• Manage: \`!agy thread new <name>\` | \`!agy thread reset [name]\` | \`!agy thread delete <name>\`*`;
@@ -536,7 +536,7 @@ function formatThreadStatus(customPath = null) {
     const convId = data.threads[active] || null;
 
     let reply = `**Current Thread & Conversation Status:**\n` +
-        `*   **Active Thread:** \`${active}\` ★\n`;
+        `*   **Active Thread:** \`${active}\` ⡺\n`;
 
     if (convId) {
         reply += `*   **Bound Conversation ID:** \`${convId}\`\n`;
@@ -667,6 +667,30 @@ function formatContextUsage(customPath = null) {
     }
 }
 
+/**
+ * Retrieves full metadata context for a thread (repo binding, conversation summary, known threads).
+ */
+function getThreadContextInfo(threadName = null, customPath = null) {
+    const data = getThreads(customPath);
+    const active = (threadName || data.active_thread || 'default').trim();
+    const convId = data.threads[active] || null;
+    const repoMapping = (data.thread_repos && data.thread_repos[active]) || null;
+    
+    let convSummary = null;
+    if (convId) {
+        convSummary = getConversationById(convId);
+    }
+
+    return {
+        activeThread: active,
+        conversationId: convId,
+        repoSlug: repoMapping,
+        conversationTitle: convSummary ? getConversationTitle(convSummary) : null,
+        knownThreads: Object.keys(data.threads || {}),
+        knownRepos: Object.values(data.thread_repos || {})
+    };
+}
+
 module.exports = {
     getThreadsFilePath,
     getConversationDbPath,
@@ -685,5 +709,6 @@ module.exports = {
     formatContextUsage,
     formatRelativeTime,
     getConversationTitle,
+    getThreadContextInfo,
     slugify
 };

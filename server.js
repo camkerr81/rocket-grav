@@ -61,8 +61,17 @@ const {
     formatConversationList,
     formatThreadList,
     formatThreadStatus,
-    formatContextUsage
+    formatContextUsage,
+    getThreadContextInfo
 } = require('./threads');
+
+const {
+    checkContextDivergence,
+    formatContextDivergencePrompt
+} = require('./context_check');
+
+const pendingContextConfirmations = {};
+let contextCheckEnabled = (process.env.ENABLE_CONTEXT_CHECK !== 'false');
 
 const {
     getWorkspaceAgentsMdPath,
@@ -1289,7 +1298,7 @@ app.post('/webhook', async (req, res) => {
             `*   **Auto-Update Status:** ${autoUpdateState.enabled ? `Enabled (daily check every ${autoUpdateState.intervalHours}h)` : 'Disabled'}\n` +
             `*   **Last Auto-Check:** ${autoUpdateState.lastCheck ? new Date(autoUpdateState.lastCheck).toLocaleString() : 'Never'}\n` +
             `*   **Last Status:** \`${autoUpdateState.lastResult}\`\n` +
-            `*   **Status:** ${hasUpdate ? `⢴⠃ **Update available!** Run \`!agy update\` to upgrade immediately.` : `✓ Antigravity CLI is up to date.`}`;
+            `*   **Status:** ${hasUpdate ? `⢴⠃ **Update available!** Run \`!agy update\` to upgrade immediately.` : `[⢄⠎] Antigravity CLI is up to date.`}`;
         
         await postMessage(roomId, tmid, reply);
         return;
@@ -1439,6 +1448,53 @@ app.post('/webhook', async (req, res) => {
     }
 
     const lowerMessage = messageText.toLowerCase().trim();
+
+    // Context Divergence Confirmation Handlers
+    if (lowerMessage === 'proceed' || lowerMessage === 'confirm' || lowerMessage === 'yes' || lowerMessage === 'continue') {
+        if (pendingContextConfirmations[roomId]) {
+            const pending = pendingContextConfirmations[roomId];
+            delete pendingContextConfirmations[roomId];
+            await postMessage(roomId, tmid, `[⢄⠎] Proceeding with task in thread **\`${pending.activeThread}\`**...`);
+            if (queueManager.isBusy()) {
+                const queuePosition = queueManager.enqueue(pending.jobData);
+                const preview = pending.jobData.messageText;
+                const cleanPreview = preview.length > 70 ? preview.substring(0, 67) + '...' : preview;
+                const queueMsg = `\`⠋\` **Queued (#${queuePosition} in queue):** "${cleanPreview}"\n*(Thread: \`${pending.activeThread}\` • Waiting for active task to complete...)*`;
+                const queuedMsgId = await postMessage(roomId, tmid, queueMsg);
+                queueManager.updateJobMsgId(queuePosition - 1, queuedMsgId);
+            } else {
+                executePromptJob({
+                    id: `job_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+                    ...pending.jobData
+                });
+            }
+            return;
+        }
+    }
+
+    if (lowerMessage === 'cancel' || lowerMessage === 'abort' || lowerMessage === 'stop') {
+        if (pendingContextConfirmations[roomId]) {
+            delete pendingContextConfirmations[roomId];
+            await postMessage(roomId, tmid, `[⢄⠎] Pending prompt cancelled.`);
+            return;
+        }
+    }
+
+    // Toggle Context Divergence Checking
+    if (lowerMessage.startsWith('context check') || lowerMessage === 'context-check') {
+        const arg = lowerMessage.replace(/^context[- ]check\s*/, '').trim();
+        if (arg === 'on' || arg === 'enable' || arg === 'true') {
+            contextCheckEnabled = true;
+            await postMessage(roomId, tmid, '[⢄⠎] Context divergence checking is now **enabled**.');
+        } else if (arg === 'off' || arg === 'disable' || arg === 'false') {
+            contextCheckEnabled = false;
+            await postMessage(roomId, tmid, '[⢘⡃] Context divergence checking is now **disabled**.');
+        } else {
+            const statusStr = contextCheckEnabled ? 'enabled [⢄⠎]' : 'disabled [⢘⡃]';
+            await postMessage(roomId, tmid, `⡞⣗ **Context Divergence Check Status:** ${statusStr}\nToggle with: \`!agy context check on\` or \`!agy context check off\``);
+        }
+        return;
+    }
 
     // Context Window & Token Capacity Telemetry
     if (
@@ -1688,6 +1744,30 @@ app.post('/webhook', async (req, res) => {
         const newName = threadNewMatch[1].trim();
         const res = resolveSwitchTarget(newName);
         await postMessage(roomId, tmid, res.message || `[⡱⢎] ${res.error}`);
+
+        // If a pending divergent prompt exists for this room, automatically execute it in the new thread
+        if (res.success && pendingContextConfirmations[roomId]) {
+            const pending = pendingContextConfirmations[roomId];
+            delete pendingContextConfirmations[roomId];
+            await postMessage(roomId, tmid, `[⢄⠎] Auto-executing pending prompt in new thread **\`${newName}\`**...`);
+            const job = {
+                ...pending.jobData,
+                threadName: newName
+            };
+            if (queueManager.isBusy()) {
+                const queuePosition = queueManager.enqueue(job);
+                const preview = job.messageText;
+                const cleanPreview = preview.length > 70 ? preview.substring(0, 67) + '...' : preview;
+                const queueMsg = `\`⠋\` **Queued (#${queuePosition} in queue):** "${cleanPreview}"\n*(Thread: \`${newName}\` • Waiting for active task to complete...)*`;
+                const queuedMsgId = await postMessage(roomId, tmid, queueMsg);
+                queueManager.updateJobMsgId(queuePosition - 1, queuedMsgId);
+            } else {
+                executePromptJob({
+                    id: `job_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+                    ...job
+                });
+            }
+        }
         return;
     }
 
@@ -1748,6 +1828,30 @@ app.post('/webhook', async (req, res) => {
         const res = resolveSwitchTarget(switchTarget);
         if (res.success) {
             await postMessage(roomId, tmid, res.message);
+            // If a pending divergent prompt exists for this room, auto-execute it in the switched thread
+            if (pendingContextConfirmations[roomId]) {
+                const pending = pendingContextConfirmations[roomId];
+                delete pendingContextConfirmations[roomId];
+                const activeNow = getThreads().active_thread || 'default';
+                await postMessage(roomId, tmid, `[⢄⠎] Auto-executing pending prompt in switched thread **\`${activeNow}\`**...`);
+                const job = {
+                    ...pending.jobData,
+                    threadName: activeNow
+                };
+                if (queueManager.isBusy()) {
+                    const queuePosition = queueManager.enqueue(job);
+                    const preview = job.messageText;
+                    const cleanPreview = preview.length > 70 ? preview.substring(0, 67) + '...' : preview;
+                    const queueMsg = `\`⠋\` **Queued (#${queuePosition} in queue):** "${cleanPreview}"\n*(Thread: \`${activeNow}\` • Waiting for active task to complete...)*`;
+                    const queuedMsgId = await postMessage(roomId, tmid, queueMsg);
+                    queueManager.updateJobMsgId(queuePosition - 1, queuedMsgId);
+                } else {
+                    executePromptJob({
+                        id: `job_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+                        ...job
+                    });
+                }
+            }
         } else {
             await postMessage(roomId, tmid, `[⡱⢎] ${res.error}`);
         }
@@ -1843,7 +1947,7 @@ app.post('/webhook', async (req, res) => {
             }
             let reply = `**Available Local Ollama Models (${models.length}):**\n\n| Model Name | Size | Family | Active |\n|---|---|---|:---:|\n`;
             for (const m of models) {
-                const isActive = m.name === ollamaModel ? '✓' : '';
+                const isActive = m.name === ollamaModel ? '⢄⠎' : '';
                 const size = m.details?.parameter_size || (m.size ? `${(m.size / (1024*1024*1024)).toFixed(1)} GB` : 'N/A');
                 const family = m.details?.family || 'N/A';
                 reply += `| \`${m.name}\` | ${size} | ${family} | ${isActive} |\n`;
@@ -1913,11 +2017,13 @@ app.post('/webhook', async (req, res) => {
         }
     }
 
-    // Forced AGY execution (e.g. "!agy full <prompt>" or "!agy force-agy <prompt>")
+    // Forced AGY execution (e.g. "!agy full <prompt>", "!agy force-agy <prompt>", "!agy force <prompt>")
     let forceAgy = false;
-    if (messageText.toLowerCase().startsWith('full ') || messageText.toLowerCase().startsWith('force-agy ') || messageText.toLowerCase().startsWith('agy ')) {
-        messageText = messageText.replace(/^(?:full|force-agy|agy)\s+/i, '').trim();
+    let bypassContextCheck = false;
+    if (messageText.toLowerCase().startsWith('full ') || messageText.toLowerCase().startsWith('force-agy ') || messageText.toLowerCase().startsWith('agy ') || messageText.toLowerCase().startsWith('force ')) {
+        messageText = messageText.replace(/^(?:full|force-agy|agy|force)\s+/i, '').trim();
         forceAgy = true;
+        bypassContextCheck = true;
     }
 
     // Explicit direct Ollama prompt (e.g. "!agy ollama <prompt>" or "!agy ask <prompt>")
@@ -1932,6 +2038,35 @@ app.post('/webhook', async (req, res) => {
     }
 
     const activeThreadName = getThreads().active_thread || 'default';
+
+    // Context Divergence Check (before queueing or execution)
+    if (contextCheckEnabled && !bypassContextCheck && !isOllamaDirect) {
+        const contextInfo = getThreadContextInfo(activeThreadName);
+        const divCheck = await checkContextDivergence(messageText, contextInfo);
+        if (divCheck.isDivergent) {
+            const pendingJob = {
+                roomId,
+                tmid,
+                messageText,
+                forceAgy: true,
+                shouldRefine,
+                refinedContext,
+                isOllamaDirect,
+                ollamaPrompt,
+                threadName: activeThreadName
+            };
+            pendingContextConfirmations[roomId] = {
+                originalPrompt: messageText,
+                activeThread: activeThreadName,
+                suggestedThread: divCheck.suggestedThread,
+                jobData: pendingJob,
+                divCheck
+            };
+            await postMessage(roomId, tmid, formatContextDivergencePrompt(divCheck, messageText));
+            return;
+        }
+    }
+
     const jobData = {
         roomId,
         tmid,
@@ -1948,7 +2083,7 @@ app.post('/webhook', async (req, res) => {
         const queuePosition = queueManager.enqueue(jobData);
         const preview = isOllamaDirect ? ollamaPrompt : messageText;
         const cleanPreview = preview.length > 70 ? preview.substring(0, 67) + '...' : preview;
-        const queueMsg = `⏳ **Queued (#${queuePosition} in queue):** "${cleanPreview}"\n*(Thread: \`${activeThreadName}\` • Waiting for active task to complete...)*`;
+        const queueMsg = `\`⠋\` **Queued (#${queuePosition} in queue):** "${cleanPreview}"\n*(Thread: \`${activeThreadName}\` • Waiting for active task to complete...)*`;
         const queuedMsgId = await postMessage(roomId, tmid, queueMsg);
         queueManager.updateJobMsgId(queuePosition - 1, queuedMsgId);
         return;
