@@ -18,7 +18,10 @@ const UUID_PREFIX_REGEX = /^[0-9a-f]{6,36}$/i;
 const INDEX_REGEX = /^#?(\d+)$/;
 
 function getThreadsFilePath(customPath = null) {
-    return customPath || process.env.THREADS_FILE || DEFAULT_THREADS_FILE;
+    if (customPath) return customPath;
+    if (process.env.THREADS_FILE) return process.env.THREADS_FILE;
+    if (fs.existsSync('/workspace')) return '/workspace/threads.json';
+    return path.join(process.cwd(), 'threads.json');
 }
 
 function getConversationDbPath() {

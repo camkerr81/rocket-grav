@@ -106,6 +106,12 @@ const {
     formatRepoStatusList
 } = require('./git_sync');
 
+const {
+    syncThreadsVault,
+    getVaultStatus,
+    formatVaultStatusReply
+} = require('./vault_sync');
+
 const { getAdapter } = require('./adapters');
 const adapter = getAdapter();
 console.log(`[Rocket-Grav] Initialized with chat adapter: ${adapter.name.toUpperCase()}`);
@@ -1023,6 +1029,18 @@ async function runAgySession(roomId, tmid, messageText, existingMsgId = null, ex
                 console.warn(`[Rocket-Grav] Background post-turn git sync warning: ${gitErr.message}`);
             });
 
+            // Non-blocking Background Gitea Threads Vault Synchronization
+            syncThreadsVault({
+                threadName: activeThreadName,
+                conversationId: (finalResultObj && finalResultObj.conversation_id) || getThreads().threads[activeThreadName]
+            }).then(vaultRes => {
+                if (vaultRes && vaultRes.changed) {
+                    console.log(`[Rocket-Grav] ⣮⣵ Synchronized thread "${activeThreadName}" session to Gitea vault (${vaultRes.commitHash})`);
+                }
+            }).catch(vaultErr => {
+                console.warn(`[Rocket-Grav] Background vault sync warning: ${vaultErr.message}`);
+            });
+
             // Non-blocking Background Lesson Distillation via Local Ollama
             autoDistillAndSaveLesson(messageText, finalOutput, {
                 workspaceDir: targetCwd,
@@ -1280,6 +1298,8 @@ app.post('/webhook', async (req, res) => {
 *   \`!agy pull\` (or \`sync\`) - Manually sync & pull latest commits from Gitea
 *   \`!agy push\` - Manually commit & push all local changes to Gitea
 *   \`!agy issues\` (or \`beads\`) - List all open beads issues
+*   \`!agy vault\` - Show Gitea threads vault sync status and repository link
+*   \`!agy vault sync\` - Manually trigger on-demand push of threads and sessions to Gitea vault
 *   \`!agy version\` - Show installed Antigravity CLI version and update status
 *   \`!agy update\` (or \`upgrade\`) - Manually check and update Antigravity CLI to latest version
 *   \`!agy help\` - Show this help message`;
@@ -1682,6 +1702,42 @@ app.post('/webhook', async (req, res) => {
             reply = `[⢘⡃] **Committed locally (\`${res.commitHash}\`), but push failed:** ${res.pushError}`;
         } else {
             reply = `[⢄⠎] Working directory in \`${path.basename(repoDir)}\` is clean. Nothing to push.`;
+        }
+        if (thinkingMsgId) {
+            await updateMessage(roomId, thinkingMsgId, reply);
+        } else {
+            await postMessage(roomId, tmid, reply);
+        }
+        return;
+    }
+
+    // Vault Status & Synchronization Commands
+    if (
+        lowerMessage === 'vault' ||
+        lowerMessage === 'agy vault' ||
+        lowerMessage === 'vault status' ||
+        lowerMessage === 'threads vault'
+    ) {
+        const reply = formatVaultStatusReply();
+        await postMessage(roomId, tmid, reply);
+        return;
+    }
+
+    if (
+        lowerMessage === 'vault sync' ||
+        lowerMessage === 'agy vault sync' ||
+        lowerMessage === 'sync vault'
+    ) {
+        const thinkingMsgId = await postMessage(roomId, tmid, '`⠋` *Synchronizing threads and sessions to Gitea vault...*');
+        const activeThread = getThreads().active_thread || 'default';
+        const res = await syncThreadsVault({ threadName: activeThread });
+        let reply = '';
+        if (res.success) {
+            reply = res.changed
+                ? `[⢄⠎] **Vault Synchronized to Gitea:** Pushed \`${res.commitHash}\` (${res.syncedConversations} sessions).\n*Resume locally with:* \`rocket-grav-sync resume ${res.threadName}\``
+                : `[⢄⠎] **Vault Up to Date:** No new changes to push.\n*Resume locally with:* \`rocket-grav-sync resume ${res.threadName}\``;
+        } else {
+            reply = `[⡱⢎] **Vault Sync Failed:** ${res.error}`;
         }
         if (thinkingMsgId) {
             await updateMessage(roomId, thinkingMsgId, reply);
@@ -2204,6 +2260,23 @@ app.post('/repos/sync', async (req, res) => {
         const result = action === 'push'
             ? await syncPostTurn(repoDir, { threadName: thread, promptText: req.body.prompt || 'REST sync push' })
             : syncPreFlight(repoDir);
+        res.json(result);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/vault', (req, res) => {
+    res.json({
+        status: getVaultStatus(),
+        rendered: formatVaultStatusReply()
+    });
+});
+
+app.post('/vault/sync', async (req, res) => {
+    const thread = (req.body && req.body.thread) || getThreads().active_thread;
+    try {
+        const result = await syncThreadsVault({ threadName: thread });
         res.json(result);
     } catch (err) {
         res.status(500).json({ error: err.message });

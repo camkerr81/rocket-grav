@@ -274,6 +274,8 @@ Rocket-Grav includes a bundled Model Context Protocol (MCP) server located in `m
 | `!agy repos` | Lists all threads and their bound repository sync status. | `!agy repos` |
 | `!agy pull` | Manually pulls and rebases the active thread's bound repo from Gitea. | `!agy pull` |
 | `!agy push` | Manually commits and pushes local changes to Gitea for the active thread. | `!agy push` |
+| `!agy vault` | Displays Gitea threads vault sync status, repository link, and sessions. | `!agy vault` |
+| `!agy vault sync` | Triggers immediate synchronization of threads and sessions to Gitea. | `!agy vault sync` |
 
 ### 7. Versioning, Diagnostics & Endpoints
 
@@ -322,8 +324,29 @@ Rocket-Grav provides seamless cross-device workflow handoff. When you commit and
 | `GET /repos` | REST Endpoint | Returns JSON mapping of threads to repositories and their sync status. | `curl http://localhost:8080/repos` |
 | `POST /repos/bind` | REST Endpoint | Dynamically binds a thread to a repository via HTTP. | `curl -X POST http://localhost:8080/repos/bind -d '{"thread":"default","repo":"rocket-grav"}'` |
 | `POST /repos/sync` | REST Endpoint | Triggers manual pre-flight pull or post-turn push via HTTP. | `curl -X POST http://localhost:8080/repos/sync -d '{"action":"pull"}'` |
+| `GET /vault` | REST Endpoint | Returns status of Gitea threads vault, last commit, and synced session count. | `curl http://localhost:8080/vault` |
+| `POST /vault/sync` | REST Endpoint | Triggers on-demand synchronization of threads and sessions to Gitea. | `curl -X POST http://localhost:8080/vault/sync` |
 
-### 10. Local Model Handoff & Pipeline Automation
+### 10. Automated Gitea Threads Vault & Local Resumption CLI (`rocket-grav-sync`)
+
+In addition to code repository syncing, Rocket-Grav automatically synchronizes the underlying **Antigravity conversation databases (`conversations/<uuid>.db`), step transcripts (`brain/<uuid>/`), and `threads.json`** into a dedicated private Gitea repository (`camkerr81/rocket-grav-threads`).
+
+This allows developers to seamlessly resume any conversation thread started in Rocket.Chat directly inside their local workstation terminal with zero friction:
+
+* • **Post-Turn Background Vault Sync:** Whenever AGY finishes a prompt turn, Rocket-Grav asynchronously stages the active conversation database, brain transcript logs, and updated thread mappings into the vault repository and pushes to Gitea.
+* • **One-Command Local Resumption:** Running `rocket-grav-sync resume <thread-name>` on your workstation pulls the latest session from Gitea, merges the conversation into your local `~/.gemini/antigravity-cli/` directory, navigates to the bound project repository, and spawns `agy --conversation <uuid>` in your local terminal.
+
+#### Workstation CLI Commands (`rocket-grav-sync`)
+
+| Command | Description | Example |
+|---|---|---|
+| `rocket-grav-sync list` | Displays all threads and sessions in the Gitea vault. | `rocket-grav-sync list` |
+| `rocket-grav-sync pull` | Pulls all conversation DBs, transcripts, and catalogs into `~/.gemini/`. | `rocket-grav-sync pull` |
+| `rocket-grav-sync resume <thread>` | Pulls session from vault and launches local `agy` in the bound repo. | `rocket-grav-sync resume default` |
+| `rocket-grav-sync push` | Pushes locally modified conversation files back to the Gitea vault. | `rocket-grav-sync push` |
+| `rocket-grav-sync status` | Checks synchronization status between workstation and Gitea vault. | `rocket-grav-sync status` |
+
+### 11. Local Model Handoff & Pipeline Automation
 
 Rocket-Grav bridges the high-reasoning autonomous power of the Google Antigravity CLI with zero-token-cost local Ollama compute running on your LAN:
 

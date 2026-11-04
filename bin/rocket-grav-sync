@@ -1,0 +1,407 @@
+#!/usr/bin/env node
+/**
+ * Rocket-Grav Threads & Sessions Synchronization CLI
+ * 
+ * Synchronizes Antigravity conversation threads, SQLite databases, and brain transcripts
+ * from the Gitea rocket-grav-threads vault repository into the local workstation, allowing
+ * seamless local resumption of sessions started in Rocket.Chat.
+ * 
+ * Enforces Zero Emoji Policy with tactile Braille icons.
+ */
+
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const { execSync, spawnSync } = require('child_process');
+
+const DEFAULT_GITEA_BASE = process.env.GITEA_URL || 'http://192.168.8.177:3000';
+const DEFAULT_GITEA_USER = process.env.GITEA_USER || 'camkerr81';
+const DEFAULT_VAULT_REPO = process.env.THREADS_VAULT_REPO || 'rocket-grav-threads';
+const DEFAULT_CACHE_DIR = path.join(os.homedir(), '.cache', 'rocket-grav-threads');
+const LOCAL_GEMINI_DIR = path.join(os.homedir(), '.gemini', 'antigravity-cli');
+
+function getGiteaToken() {
+    for (const envVar of ['GITEA_PAT', 'GITEA_TOKEN', 'GITEA_API_TOKEN']) {
+        const val = process.env[envVar];
+        if (val && val.trim()) return val.trim();
+    }
+
+    const credPath = path.join(os.homedir(), '.git-credentials');
+    if (fs.existsSync(credPath)) {
+        try {
+            const lines = fs.readFileSync(credPath, 'utf8').split('\n');
+            const targetHost = new URL(DEFAULT_GITEA_BASE).hostname;
+            for (const line of lines) {
+                if (line.includes(targetHost)) {
+                    const clean = line.trim().replace(/%3a/gi, ':');
+                    const m = clean.match(/^https?:\/\/([^:]+):([^@]+)@/);
+                    if (m && m[2]) {
+                        return decodeURIComponent(m[2]).trim();
+                    }
+                }
+            }
+        } catch (_) {}
+    }
+    return null;
+}
+
+function ensureGitConfig() {
+    try {
+        execSync('git config --global credential.helper store', { stdio: 'pipe' });
+        const token = getGiteaToken();
+        if (token) {
+            const credPath = path.join(os.homedir(), '.git-credentials');
+            const urlObj = new URL(DEFAULT_GITEA_BASE);
+            const hostWithPort = urlObj.host;
+            const credLine = `http://${DEFAULT_GITEA_USER}:${token}@${hostWithPort}`;
+
+            let existing = '';
+            if (fs.existsSync(credPath)) {
+                existing = fs.readFileSync(credPath, 'utf8');
+            }
+
+            if (!existing.includes(hostWithPort)) {
+                fs.appendFileSync(credPath, `\n${credLine}\n`, { encoding: 'utf8', mode: 0o600 });
+            }
+        }
+    } catch (_) {}
+}
+
+function ensureVaultCloned(cacheDir = DEFAULT_CACHE_DIR) {
+    ensureGitConfig();
+    const cloneUrl = `${DEFAULT_GITEA_BASE.replace(/\/+$/, '')}/${DEFAULT_GITEA_USER}/${DEFAULT_VAULT_REPO}.git`;
+    const execOpts = { stdio: 'pipe', timeout: 45000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } };
+
+    if (fs.existsSync(path.join(cacheDir, '.git'))) {
+        try {
+            execSync('git fetch origin', { ...execOpts, cwd: cacheDir });
+            try {
+                execSync('git pull --rebase origin main', { ...execOpts, cwd: cacheDir });
+            } catch (_) {}
+            return { success: true, cacheDir };
+        } catch (e) {
+            return { success: true, cacheDir, warning: e.message };
+        }
+    }
+
+    try {
+        fs.mkdirSync(path.dirname(cacheDir), { recursive: true });
+        console.log(`[⣮⣵] Cloning ${cloneUrl} into ${cacheDir}...`);
+        execSync(`git clone "${cloneUrl}" "${cacheDir}"`, execOpts);
+        return { success: true, cacheDir };
+    } catch (e) {
+        const errStr = e.stderr ? e.stderr.toString() : e.message;
+        console.error(`[⡱⢎] Clone failed: ${errStr}`);
+        return { success: false, error: errStr };
+    }
+}
+
+function copyDirRecursiveSync(src, dest) {
+    if (!fs.existsSync(src)) return 0;
+    fs.mkdirSync(dest, { recursive: true });
+    let count = 0;
+    const entries = fs.readdirSync(src, { withFileTypes: true });
+    for (const entry of entries) {
+        const srcPath = path.join(src, entry.name);
+        const destPath = path.join(dest, entry.name);
+        if (entry.isDirectory()) {
+            count += copyDirRecursiveSync(srcPath, destPath);
+        } else if (entry.isFile()) {
+            fs.copyFileSync(srcPath, destPath);
+            count++;
+        }
+    }
+    return count;
+}
+
+function mergeSummariesDb(vaultDbPath, localDbPath) {
+    if (!fs.existsSync(vaultDbPath)) return false;
+    if (!fs.existsSync(localDbPath)) {
+        fs.mkdirSync(path.dirname(localDbPath), { recursive: true });
+        fs.copyFileSync(vaultDbPath, localDbPath);
+        return true;
+    }
+
+    try {
+        const pyScript = `import sqlite3, sys
+try:
+    conn = sqlite3.connect('${localDbPath.replace(/'/g, "\\'")}')
+    conn.execute("ATTACH DATABASE '${vaultDbPath.replace(/'/g, "\\'")}' AS vault")
+    # Verify vault table exists
+    cur = conn.cursor()
+    cur.execute("SELECT name FROM vault.sqlite_master WHERE type='table' AND name='conversation_summaries'")
+    if cur.fetchone():
+        conn.execute("INSERT OR REPLACE INTO main.conversation_summaries SELECT * FROM vault.conversation_summaries")
+        conn.commit()
+    conn.execute("DETACH DATABASE vault")
+    conn.close()
+    sys.exit(0)
+except Exception as e:
+    sys.stderr.write(str(e))
+    sys.exit(1)
+`;
+        execSync(`python3 -c "${pyScript.replace(/"/g, '\\"')}"`, { stdio: 'pipe', timeout: 10000 });
+        return true;
+    } catch (e) {
+        console.warn(`[VaultSync] ⢘⡃ Summaries database merge note: ${e.message}`);
+        return false;
+    }
+}
+
+function getVaultThreadsData(cacheDir = DEFAULT_CACHE_DIR) {
+    const tFile = path.join(cacheDir, 'threads.json');
+    if (fs.existsSync(tFile)) {
+        try {
+            return JSON.parse(fs.readFileSync(tFile, 'utf8'));
+        } catch (_) {}
+    }
+    return { active_thread: 'default', threads: {}, thread_repos: {} };
+}
+
+function cmdPull() {
+    console.log(`[⣎⣱] Synchronizing conversation threads from Gitea vault...`);
+    const res = ensureVaultCloned();
+    if (!res.success) {
+        console.error(`[⡱⢎] Pull failed: ${res.error}`);
+        process.exit(1);
+    }
+
+    const cacheDir = res.cacheDir;
+    let syncedDbs = 0;
+    let syncedBrainFiles = 0;
+
+    // 1. Copy conversations
+    const vaultConvDir = path.join(cacheDir, 'conversations');
+    const localConvDir = path.join(LOCAL_GEMINI_DIR, 'conversations');
+    if (fs.existsSync(vaultConvDir)) {
+        fs.mkdirSync(localConvDir, { recursive: true });
+        for (const file of fs.readdirSync(vaultConvDir)) {
+            if (file.endsWith('.db') || file.endsWith('.pb')) {
+                fs.copyFileSync(path.join(vaultConvDir, file), path.join(localConvDir, file));
+                syncedDbs++;
+            }
+        }
+    }
+
+    // 2. Copy brain
+    const vaultBrainDir = path.join(cacheDir, 'brain');
+    const localBrainDir = path.join(LOCAL_GEMINI_DIR, 'brain');
+    if (fs.existsSync(vaultBrainDir)) {
+        syncedBrainFiles = copyDirRecursiveSync(vaultBrainDir, localBrainDir);
+    }
+
+    // 3. Merge conversation_summaries.db
+    const vaultDb = path.join(cacheDir, 'conversation_summaries.db');
+    const localDb = path.join(LOCAL_GEMINI_DIR, 'conversation_summaries.db');
+    const merged = mergeSummariesDb(vaultDb, localDb);
+
+    const data = getVaultThreadsData(cacheDir);
+    const count = Object.keys(data.threads || {}).length;
+
+    console.log(`[⢄⠎] **Synchronization Complete:**`);
+    console.log(`    • Threads Loaded: ${count} (Active: \`${data.active_thread || 'default'}\`)`);
+    console.log(`    • Conversation DBs: ${syncedDbs}`);
+    console.log(`    • Brain Artifacts: ${syncedBrainFiles} files`);
+    console.log(`    • Summaries Catalog: ${merged ? 'Merged into local database' : 'Preserved'}`);
+}
+
+function cmdList() {
+    const res = ensureVaultCloned();
+    if (!res.success) {
+        console.error(`[⡱⢎] Could not read vault: ${res.error}`);
+        process.exit(1);
+    }
+
+    const data = getVaultThreadsData(res.cacheDir);
+    const active = data.active_thread || 'default';
+    const names = Object.keys(data.threads || {});
+
+    console.log(`\n**⣮⣵ Gitea Rocket-Grav Threads Vault (${names.length}):**\n`);
+
+    if (names.length === 0) {
+        console.log(`*(No threads registered in vault yet)*\n`);
+        return;
+    }
+
+    names.forEach((name, idx) => {
+        const num = idx + 1;
+        const convId = data.threads[name];
+        const isActive = (name === active);
+        const repo = (data.thread_repos && data.thread_repos[name]) || 'none';
+        const mark = isActive ? '⡺ *(Active)*' : '';
+        const shortId = convId ? `\`${convId.substring(0, 8)}...\`` : '*(none)*';
+
+        console.log(`**#${num}** ${isActive ? '⡺ ' : ''}\`${name}\` ${mark}`);
+        console.log(`└─ Repo: \`${repo}\` • Session: ${shortId}\n`);
+    });
+
+    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    console.log(`*To resume a thread locally:* \`rocket-grav-sync resume <thread-name>\``);
+    console.log(`*To pull all sessions:* \`rocket-grav-sync pull\`\n`);
+}
+
+function cmdResume(target) {
+    if (!target) {
+        console.error(`[⡱⢎] Please specify a thread name or conversation UUID to resume.\nExample: rocket-grav-sync resume default`);
+        process.exit(1);
+    }
+
+    // 1. Pull latest session files from vault
+    cmdPull();
+
+    const data = getVaultThreadsData(DEFAULT_CACHE_DIR);
+    const trimmed = target.trim();
+    let convId = null;
+    let boundRepo = null;
+    let threadName = trimmed;
+
+    // Check if target is a thread name
+    if (data.threads && data.threads.hasOwnProperty(trimmed)) {
+        convId = data.threads[trimmed];
+        boundRepo = (data.thread_repos && data.thread_repos[trimmed]) || null;
+    } else {
+        // Match case-insensitively
+        const matchKey = Object.keys(data.threads || {}).find(k => k.toLowerCase() === trimmed.toLowerCase());
+        if (matchKey) {
+            threadName = matchKey;
+            convId = data.threads[matchKey];
+            boundRepo = (data.thread_repos && data.thread_repos[matchKey]) || null;
+        } else if (/^[0-9a-f]{8}-[0-9a-f]{4}/i.test(trimmed)) {
+            convId = trimmed;
+        }
+    }
+
+    if (!convId) {
+        console.error(`[⡱⢎] Thread "${trimmed}" does not have an active conversation session attached.`);
+        console.error(`Available threads: ${Object.keys(data.threads || {}).join(', ')}`);
+        process.exit(1);
+    }
+
+    // 2. Resolve working directory if bound to a repo
+    let targetDir = process.cwd();
+    if (boundRepo) {
+        const repoBase = boundRepo.replace(/\.git$/, '').split('/').pop();
+        const candidatePaths = [
+            path.join(os.homedir(), 'Work', repoBase),
+            path.join(process.cwd(), repoBase),
+            path.join(os.homedir(), repoBase)
+        ];
+
+        for (const p of candidatePaths) {
+            if (fs.existsSync(p)) {
+                targetDir = p;
+                break;
+            }
+        }
+    }
+
+    console.log(`\n[⡴⢧] **Resuming conversation locally with Antigravity CLI:**`);
+    console.log(`    • Thread: \`${threadName}\``);
+    console.log(`    • Conversation UUID: \`${convId}\``);
+    console.log(`    • Working Directory: \`${targetDir}\``);
+    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+
+    // 3. Launch agy with --conversation <convId>
+    try {
+        process.chdir(targetDir);
+    } catch (_) {}
+
+    const agyBin = 'agy';
+    const result = spawnSync(agyBin, ['--conversation', convId], {
+        stdio: 'inherit',
+        cwd: targetDir,
+        env: process.env
+    });
+
+    if (result.error) {
+        console.error(`[⡱⢎] Failed to launch agy: ${result.error.message}`);
+        process.exit(1);
+    }
+}
+
+function cmdPush() {
+    console.log(`[⣲⣗] Pushing local conversation updates to Gitea vault...`);
+    const res = ensureVaultCloned();
+    if (!res.success) {
+        console.error(`[⡱⢎] Cannot access vault: ${res.error}`);
+        process.exit(1);
+    }
+
+    const cacheDir = res.cacheDir;
+    const localConvDir = path.join(LOCAL_GEMINI_DIR, 'conversations');
+    const localBrainDir = path.join(LOCAL_GEMINI_DIR, 'brain');
+
+    if (fs.existsSync(localConvDir)) {
+        copyDirRecursiveSync(localConvDir, path.join(cacheDir, 'conversations'));
+    }
+    if (fs.existsSync(localBrainDir)) {
+        copyDirRecursiveSync(localBrainDir, path.join(cacheDir, 'brain'));
+    }
+
+    const execOpts = { cwd: cacheDir, stdio: 'pipe', timeout: 30000 };
+    const status = execSync('git status --porcelain', execOpts).toString().trim();
+    if (!status) {
+        console.log(`[⢄⠎] Vault is already up to date with local workstation.`);
+        return;
+    }
+
+    execSync('git add -A', execOpts);
+    execSync('git commit -m "chore(vault): ⣲⣗ push local workstation sessions to vault"', execOpts);
+    execSync('git push origin main', execOpts);
+    const hash = execSync('git rev-parse --short HEAD', execOpts).toString().trim();
+    console.log(`[⢄⠎] Successfully pushed commit ${hash} to Gitea vault.`);
+}
+
+function printUsage() {
+    console.log(`
+**Rocket-Grav Threads & Sessions Synchronization CLI** ⣮⣵
+
+Usage:
+  rocket-grav-sync <command> [arguments]
+
+Commands:
+  pull                     Pull latest threads, conversation DBs, and brain files into ~/.gemini/
+  list | threads           List all threads and sessions in the Gitea vault
+  resume <thread-name>     Pull latest session and launch local 'agy' in the bound project
+  push                     Push locally modified conversation files back to the Gitea vault
+  status                   Show vault synchronization status
+  help                     Show this help reference
+
+Examples:
+  rocket-grav-sync list
+  rocket-grav-sync pull
+  rocket-grav-sync resume default
+  rocket-grav-sync resume auth-refactor
+`);
+}
+
+const args = process.argv.slice(2);
+const command = (args[0] || 'list').toLowerCase();
+
+switch (command) {
+    case 'pull':
+        cmdPull();
+        break;
+    case 'list':
+    case 'threads':
+        cmdList();
+        break;
+    case 'resume':
+        cmdResume(args[1]);
+        break;
+    case 'push':
+        cmdPush();
+        break;
+    case 'status':
+        cmdList();
+        break;
+    case 'help':
+    case '--help':
+    case '-h':
+        printUsage();
+        break;
+    default:
+        console.error(`Unknown command: ${command}`);
+        printUsage();
+        process.exit(1);
+}
