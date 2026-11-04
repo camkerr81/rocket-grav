@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 const { getThreads, getThreadsFilePath, getConversationDbPath, getConversationById, getConversationTitle, formatRelativeTime } = require('./threads');
 const { replaceEmojis, replaceEmojisInFile } = require('./braille');
 
@@ -35,6 +35,20 @@ function getGiteaToken() {
             }
         } catch (_) {}
     }
+
+    // Attempt to lease token via Bitwarden Agent Access SDK (aac)
+    try {
+        const proxyUrl = process.env.AAC_PROXY_URL || 'ws://192.168.8.177:8089';
+        const aacArgs = ['connect', '--domain', '192.168.8.177', '--proxy-url', proxyUrl, '--output', 'json'];
+        if (process.env.AAC_TOKEN) {
+            aacArgs.push('--token', process.env.AAC_TOKEN);
+        }
+        const out = execFileSync('aac', aacArgs, { encoding: 'utf8', timeout: 30000, stdio: ['pipe', 'pipe', 'ignore'] });
+        const parsed = JSON.parse(out);
+        if (parsed && parsed.credential && parsed.credential.password) {
+            return parsed.credential.password;
+        }
+    } catch (_) {}
 
     return null;
 }

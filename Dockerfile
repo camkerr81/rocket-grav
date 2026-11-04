@@ -46,6 +46,11 @@ RUN chmod +x ./mcp/ollama-mcp.js && ln -sf /app/mcp/ollama-mcp.js /usr/local/bin
 # Install Beads issue tracker CLI and optional community MCP servers globally
 RUN npm install -g @beads/bd ollama-mcp-server
 
+# Install Bitwarden Agent Access CLI (aac)
+ARG AAC_VERSION=v0.11.0
+RUN curl -fsSL "https://github.com/bitwarden/agent-access/releases/download/${AAC_VERSION}/aac-linux-x86_64.tar.gz" | tar -xz -C /usr/local/bin/ \
+    && chmod +x /usr/local/bin/aac
+
 # Create the workspace directory
 RUN mkdir -p /workspace
 

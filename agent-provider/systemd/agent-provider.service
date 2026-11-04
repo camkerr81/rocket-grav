@@ -1,0 +1,17 @@
+[Unit]
+Description=Bitwarden Agent Access Interactive Provider Daemon
+After=network.target ap-relay.service
+Wants=ap-relay.service
+
+[Service]
+Type=simple
+Environment="RELAY_URL=ws://127.0.0.1:8089"
+Environment="HTTP_PORT=8090"
+Environment="ROCKETCHAT_URL=http://192.168.8.177:3100"
+Environment="ROCKETCHAT_USER_ID=zeCpyAPrXZPpfZts4"
+ExecStart=/home/camkerr81/.local/bin/agent-provider
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

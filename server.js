@@ -1250,6 +1250,42 @@ app.post('/webhook', async (req, res) => {
 
     const { text: rawText, roomId, tmid } = adapter.extractPayload(req);
 
+    // Intercept Bitwarden Agent Access approval commands (!approve / !deny)
+    const approveMatch = (rawText || '').trim().match(/^!(?:agy\s+)?approve\s+([a-zA-Z0-9_-]+)(?:\s+(once|15m))?/i);
+    if (approveMatch) {
+        const reqId = approveMatch[1];
+        const is15m = approveMatch[2] === '15m';
+        try {
+            const providerUrl = process.env.AAC_PROVIDER_URL || 'http://127.0.0.1:8090';
+            const resp = await fetch(`${providerUrl}/approve?id=${reqId}${is15m ? '&mins=15' : ''}`, { method: 'POST' });
+            if (resp.ok) {
+                await postMessage(roomId, tmid, `[⢄⠎] **Agent Access Approved:** \`${reqId}\`${is15m ? ' (cached for 15 minutes)' : ''}`);
+            } else {
+                await postMessage(roomId, tmid, `[⡱⢎] **Approval Failed:** Request \`${reqId}\` not found or already expired.`);
+            }
+        } catch (e) {
+            await postMessage(roomId, tmid, `[⡱⢎] **Error contacting Agent Access Provider:** ${e.message}`);
+        }
+        return;
+    }
+
+    const denyMatch = (rawText || '').trim().match(/^!(?:agy\s+)?deny\s+([a-zA-Z0-9_-]+)/i);
+    if (denyMatch) {
+        const reqId = denyMatch[1];
+        try {
+            const providerUrl = process.env.AAC_PROVIDER_URL || 'http://127.0.0.1:8090';
+            const resp = await fetch(`${providerUrl}/deny?id=${reqId}`, { method: 'POST' });
+            if (resp.ok) {
+                await postMessage(roomId, tmid, `[⡱⢎] **Agent Access Denied:** \`${reqId}\``);
+            } else {
+                await postMessage(roomId, tmid, `[⡱⢎] **Denial Failed:** Request \`${reqId}\` not found or already expired.`);
+            }
+        } catch (e) {
+            await postMessage(roomId, tmid, `[⡱⢎] **Error contacting Agent Access Provider:** ${e.message}`);
+        }
+        return;
+    }
+
     let messageText = rawText || '';
     messageText = messageText.replace(/^(?:@\w+|!\w+)\s+/, '').trim();
 
@@ -1300,6 +1336,8 @@ app.post('/webhook', async (req, res) => {
 *   \`!agy issues\` (or \`beads\`) - List all open beads issues
 *   \`!agy vault\` - Show Gitea threads vault sync status and repository link
 *   \`!agy vault sync\` - Manually trigger on-demand push of threads and sessions to Gitea vault
+*   \`!approve <req-id> [once|15m]\` - Approve a pending Bitwarden Agent Access credential request
+*   \`!deny <req-id>\` - Deny a pending Bitwarden Agent Access credential request
 *   \`!agy version\` - Show installed Antigravity CLI version and update status
 *   \`!agy update\` (or \`upgrade\`) - Manually check and update Antigravity CLI to latest version
 *   \`!agy help\` - Show this help message`;

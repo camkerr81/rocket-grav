@@ -1,0 +1,13 @@
+[Unit]
+Description=Bitwarden Agent Access Local Relay
+After=network.target
+
+[Service]
+Type=simple
+Environment="BIND_ADDR=0.0.0.0:8089"
+ExecStart=/home/camkerr81/.local/bin/ap-relay
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

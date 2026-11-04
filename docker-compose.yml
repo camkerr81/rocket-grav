@@ -19,8 +19,8 @@ services:
       - SLACK_VERIFICATION_TOKEN=${SLACK_VERIFICATION_TOKEN:-}
       - GITEA_PAT=${GITEA_PAT:-}
       - GEMINI_API=${GEMINI_API:-}
-      - BW_CLIENTID=${BW_CLIENTID:-}
-      - BW_CLIENTSECRET=${BW_CLIENTSECRET:-}
+      - AAC_TOKEN=${AAC_TOKEN:-}
+      - AAC_PROXY_URL=${AAC_PROXY_URL:-ws://192.168.8.177:8089}
       - OLLAMA_URL=${OLLAMA_URL:-http://192.168.8.194:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-phi4-mini:latest}
       - HYBRID_MODE=${HYBRID_MODE:-true}
@@ -30,4 +30,8 @@ services:
       - ./workspace:/workspace
       - ./.gemini:/root/.gemini
       - ./skills:/root/.gemini/antigravity-cli/skills
+      - aac-cache:/root/.access-protocol
     restart: unless-stopped
+
+volumes:
+  aac-cache:

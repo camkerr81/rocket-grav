@@ -1,0 +1,13 @@
+[package]
+name = "agent-provider"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ap-client = { path = "/home/camkerr81/.gemini/antigravity-cli/brain/c19ddd22-981c-4061-a167-5c97c25c5e44/scratch/agent-access-repo/crates/ap-client", features = ["native-websocket"] }
+tokio = { version = "1.36.0", features = ["rt-multi-thread", "macros", "time", "net", "io-util"] }
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+tracing = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+zeroize = "1.8"

@@ -39,8 +39,24 @@ function ensureGitConfig() {
         // Configure credential helper store
         execSync('git config --global credential.helper store', { stdio: 'pipe' });
 
-        // If GITEA_PAT is available, ensure credentials file is populated
-        const token = process.env.GITEA_PAT || process.env.GITEA_TOKEN;
+        // Resolve Gitea token via environment or Bitwarden Agent Access (aac)
+        let token = process.env.GITEA_PAT || process.env.GITEA_TOKEN;
+        if (!token) {
+            try {
+                const proxyUrl = process.env.AAC_PROXY_URL || 'ws://192.168.8.177:8089';
+                const aacArgs = ['connect', '--domain', '192.168.8.177', '--proxy-url', proxyUrl, '--output', 'json'];
+                if (process.env.AAC_TOKEN) {
+                    aacArgs.push('--token', process.env.AAC_TOKEN);
+                }
+                const out = execFileSync('aac', aacArgs, { encoding: 'utf8', timeout: 30000, stdio: ['pipe', 'pipe', 'ignore'] });
+                const parsed = JSON.parse(out);
+                if (parsed && parsed.credential && parsed.credential.password) {
+                    token = parsed.credential.password;
+                    console.log('[GitSync] ⣮⣵ Leased Gitea token via Bitwarden Agent Access (aac)');
+                }
+            } catch (_) {}
+        }
+
         if (token) {
             const credPath = path.join(os.homedir(), '.git-credentials');
             const urlObj = new URL(DEFAULT_GITEA_BASE);

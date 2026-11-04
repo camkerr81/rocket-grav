@@ -22,5 +22,9 @@ __pycache__/
 *.pyc
 *.pyo
 
+# Rust build artifacts
+target/
+agent-provider/target/
+
 # Beads / Dolt files (added by bd init)
 .beads/proxieddb/
