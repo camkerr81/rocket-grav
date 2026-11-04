@@ -345,9 +345,14 @@ async function syncThreadsVault(options = {}) {
     const threadsData = getThreads();
 
     try {
-        // 3. Copy threads.json
+        // 3. Write or copy threads.json
         if (fs.existsSync(threadsSource)) {
             fs.copyFileSync(threadsSource, path.join(vaultDir, 'threads.json'));
+        } else {
+            if (!threadsData.threads.hasOwnProperty(threadsData.active_thread || 'default')) {
+                threadsData.threads[threadsData.active_thread || 'default'] = null;
+            }
+            fs.writeFileSync(path.join(vaultDir, 'threads.json'), JSON.stringify(threadsData, null, 2), 'utf8');
         }
 
         // 4. Create destination subdirectories
